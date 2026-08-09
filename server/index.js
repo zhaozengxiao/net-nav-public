@@ -3,7 +3,6 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
 const db = require("./db");
 const monitor = require("./monitor");
 const { scanNetwork } = require("./scan");
@@ -92,6 +91,191 @@ app.get("/api/services", (req, res) => {
 app.post("/api/click/:id", (req, res) => {
   db.prepare("UPDATE services SET clicks = clicks + 1 WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
+});
+
+// 收藏切换（公开，内网自用）
+app.post("/api/favorite/:id", (req, res) => {
+  const s = db.prepare("SELECT favorite FROM services WHERE id = ?").get(req.params.id);
+  if (!s) return res.status(404).json({ error: "服务不存在" });
+  const next = s.favorite ? 0 : 1;
+  db.prepare("UPDATE services SET favorite = ? WHERE id = ?").run(next, req.params.id);
+  res.json({ ok: true, favorite: !!next });
+});
+
+// ---------- 书签（浏览器书签导入，支持文件夹） ----------
+function stripTags(s) {
+  return s.replace(/<[^>]+>/g, "").trim();
+}
+
+// 解析浏览器导出的书签 HTML（Netscape 格式），保留文件夹层级
+function parseBookmarksHtml(html) {
+  const items = [];
+  const pathStack = [];
+  const re =
+    /<DT>\s*(<H3[^>]*>([\s\S]*?)<\/H3>)|(<DL>|\s*<\/DL>)|<DT>\s*<A[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/A>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[1]) {
+      pathStack.push(stripTags(m[2])); // 文件夹入栈
+    } else if (m[3] === "<DL>") {
+      /* 进入文件夹内容区 */
+    } else if (m[3]) {
+      pathStack.pop(); // </DL> 文件夹出栈
+    } else if (m[4]) {
+      const url = m[4].trim();
+      const name = stripTags(m[5]);
+      if (/^https?:\/\//i.test(url)) {
+        items.push({ name: name || url, url, path: [...pathStack] });
+      }
+    }
+  }
+  return items;
+}
+
+app.get("/api/bookmarks", (req, res) => {
+  res.json(
+    db
+      .prepare("SELECT * FROM bookmarks ORDER BY sort, id")
+      .all()
+      .map((r) => ({ ...r, path: (() => { try { return JSON.parse(r.path || "[]"); } catch { return []; } })() }))
+  );
+});
+
+// 书签连通性检测（复用 monitor.probe，分批并发）
+app.post("/api/bookmarks/check", (req, res) => {
+  const urls = (req.body?.urls || []).filter((u) => typeof u === "string");
+  const out = {};
+  (async () => {
+    for (let i = 0; i < urls.length; i += 5) {
+      const batch = urls.slice(i, i + 5);
+      const results = await Promise.allSettled(batch.map((u) => monitor.probe(u)));
+      batch.forEach((u, j) => {
+        out[u] = results[j].status === "fulfilled" ? results[j].value : { online: false, ms: -1, code: null };
+      });
+    }
+    res.json(out);
+  })();
+});
+
+app.post("/api/bookmarks/import", (req, res) => {
+  const { html } = req.body || {};
+  if (!html || typeof html !== "string") return res.status(400).json({ error: "请上传浏览器导出的书签 HTML" });
+  const items = parseBookmarksHtml(html);
+  if (!items.length) return res.json({ added: 0, skipped: 0, total: 0 });
+  const existing = new Set(db.prepare("SELECT url, path FROM bookmarks").all().map((r) => `${r.url}|${r.path}`));
+  const ins = db.prepare("INSERT INTO bookmarks (name, url, sort, path) VALUES (?, ?, ?, ?)");
+  let sort = db.prepare("SELECT COALESCE(MAX(sort),0) AS s FROM bookmarks").get().s;
+  let added = 0,
+    skipped = 0;
+  for (const it of items) {
+    const key = `${it.url}|${JSON.stringify(it.path)}`;
+    if (existing.has(key)) {
+      skipped++;
+      continue;
+    }
+    ins.run(it.name, it.url, ++sort, JSON.stringify(it.path));
+    existing.add(key);
+    added++;
+  }
+  res.json({ added, skipped, total: items.length });
+});
+
+app.delete("/api/bookmarks/:id", (req, res) => {
+  const info = db.prepare("DELETE FROM bookmarks WHERE id = ?").run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: "书签不存在" });
+  res.json({ ok: true });
+});
+
+// 拖动排序：接收树先序 id 列表重写 sort；paths 可携带 { id: [新path] } 迁移书签所属文件夹
+app.post("/api/bookmarks/reorder", (req, res) => {
+  const ids = (req.body?.ids || []).filter((n) => Number.isInteger(n));
+  const paths = (req.body?.paths || {});
+  if (!ids.length) return res.json({ ok: true, changed: 0 });
+  const upd = db.prepare("UPDATE bookmarks SET sort = ? WHERE id = ?");
+  const updPath = db.prepare("UPDATE bookmarks SET path = ? WHERE id = ?");
+  let changed = 0;
+  ids.forEach((id, i) => {
+    changed += upd.run(i + 1, id).changes;
+    if (Array.isArray(paths[id])) updPath.run(JSON.stringify(paths[id]), id);
+  });
+  res.json({ ok: true, changed });
+});
+
+// 新建文件夹：插入占位行（url 为空，path=[父, 名]），供树形展示空文件夹
+app.post("/api/bookmarks/new-folder", (req, res) => {
+  const { parent, name } = req.body || {};
+  const n = String(name || "").trim();
+  if (!n) return res.status(400).json({ error: "文件夹名称不能为空" });
+  const p = Array.isArray(parent) ? parent.filter((x) => typeof x === "string") : [];
+  const path = [...p, n];
+  const key = JSON.stringify(path);
+  const exists = db.prepare("SELECT 1 FROM bookmarks WHERE path = ? AND url = ?").get(key, "");
+  if (exists) return res.status(400).json({ error: "文件夹已存在" });
+  let sort = db.prepare("SELECT COALESCE(MAX(sort),0) AS s FROM bookmarks").get().s;
+  db.prepare("INSERT INTO bookmarks (name, url, sort, path) VALUES (?, ?, ?, ?)").run(n, "", sort + 1, key);
+  res.json({ ok: true });
+});
+
+// 编辑书签（名称/网址）
+app.put("/api/bookmarks/:id", (req, res) => {
+  const { name, url } = req.body || {};
+  const row = db.prepare("SELECT * FROM bookmarks WHERE id = ?").get(req.params.id);
+  if (!row) return res.status(404).json({ error: "书签不存在" });
+  const newName = name === undefined ? row.name : String(name).trim();
+  const newUrl = url === undefined ? row.url : String(url).trim();
+  if (!newName) return res.status(400).json({ error: "名称不能为空" });
+  if (!/^https?:\/\//.test(newUrl)) return res.status(400).json({ error: "网址需以 http(s):// 开头" });
+  db.prepare("UPDATE bookmarks SET name = ?, url = ? WHERE id = ?").run(newName, newUrl, row.id);
+  res.json({ ok: true });
+});
+
+// 重命名文件夹：把该文件夹下（含子文件夹）所有书签的 path 前缀替换
+app.post("/api/bookmarks/rename-folder", (req, res) => {
+  const { oldPath, newName } = req.body || {};
+  if (!Array.isArray(oldPath) || oldPath.length === 0) return res.status(400).json({ error: "文件夹路径无效" });
+  const name = String(newName || "").trim();
+  if (!name) return res.status(400).json({ error: "文件夹名称不能为空" });
+  const oldJson = JSON.stringify(oldPath);
+  const rows = db.prepare("SELECT id, path FROM bookmarks").all();
+  const upd = db.prepare("UPDATE bookmarks SET path = ? WHERE id = ?");
+  let changed = 0;
+  for (const r of rows) {
+    let p;
+    try { p = JSON.parse(r.path); } catch { continue; }
+    if (!Array.isArray(p)) continue;
+    const isSelf = JSON.stringify(p) === oldJson;
+    const isChild = !isSelf && p.length > oldPath.length && oldPath.every((seg, i) => p[i] === seg);
+    if (isSelf) {
+      const parent = p.slice(0, -1);
+      parent.push(name);
+      upd.run(JSON.stringify(parent), r.id);
+      changed++;
+    } else if (isChild) {
+      p.splice(oldPath.length - 1, 1, name);
+      upd.run(JSON.stringify(p), r.id);
+      changed++;
+    }
+  }
+  res.json({ ok: true, changed });
+});
+
+// 删除文件夹：删除该文件夹下（含子文件夹）所有书签
+app.post("/api/bookmarks/delete-folder", (req, res) => {
+  const { path } = req.body || {};
+  if (!Array.isArray(path) || path.length === 0) return res.status(400).json({ error: "文件夹路径无效" });
+  const rows = db.prepare("SELECT id, path FROM bookmarks").all();
+  const del = db.prepare("DELETE FROM bookmarks WHERE id = ?");
+  let removed = 0;
+  for (const r of rows) {
+    let p;
+    try { p = JSON.parse(r.path); } catch { continue; }
+    if (!Array.isArray(p) || p.length < path.length) continue;
+    if (path.every((seg, i) => p[i] === seg)) {
+      del.run(r.id);
+      removed++;
+    }
+  }
+  res.json({ ok: true, removed });
 });
 
 // ---------- 自动发现：扫描网段 ----------
@@ -284,35 +468,38 @@ app.post("/api/admin/docker/check", adminAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// 启动时自动检测一轮（若有配置）
-setTimeout(scheduleDockerChecks, 2000);
-setInterval(scheduleDockerChecks, 6 * 60 * 60 * 1000);
-
-// ---------- 版本更新检测 ----------
-function localCommit() {
-  // Docker 构建时注入 GIT_COMMIT；本地开发直接读 .git
-  if (process.env.GIT_COMMIT && process.env.GIT_COMMIT !== "unknown") return process.env.GIT_COMMIT;
-  try {
-    return execSync("git rev-parse HEAD", { cwd: __dirname, timeout: 3000 }).toString().trim();
-  } catch {
-    return "";
-  }
+// ---------- 检测设置（ping 间隔 / Docker 检测间隔） ----------
+let dockerTimer = null;
+function getDockerIntervalMs() {
+  const row = db.prepare("SELECT value FROM settings WHERE key='docker_interval'").get();
+  const n = Number(row?.value);
+  return (Number.isFinite(n) && n >= 1 ? n : 6) * 60 * 60 * 1000;
+}
+function restartDockerTimer() {
+  if (dockerTimer) clearInterval(dockerTimer);
+  dockerTimer = setInterval(scheduleDockerChecks, getDockerIntervalMs());
 }
 
-app.get("/api/update", (req, res) => {
-  try {
-    const local = localCommit();
-    const out = execSync("git ls-remote https://github.com/zhaozengxiao/net-nav.git HEAD", {
-      timeout: 8000,
-    })
-      .toString()
-      .trim();
-    const remote = out.split(/\s+/)[0];
-    res.json({ local, remote, hasUpdate: !!(local && remote && local !== remote) });
-  } catch {
-    res.json({ local: localCommit(), remote: "", hasUpdate: false, error: "检测失败：无法访问 GitHub" });
-  }
+app.get("/api/admin/monitor-config", adminAuth, (req, res) => {
+  res.json({
+    pingInterval: Number(db.prepare("SELECT value FROM settings WHERE key='ping_interval'").get()?.value) || 60,
+    dockerInterval: Number(db.prepare("SELECT value FROM settings WHERE key='docker_interval'").get()?.value) || 6,
+  });
 });
+app.put("/api/admin/monitor-config", adminAuth, (req, res) => {
+  const { pingInterval, dockerInterval } = req.body || {};
+  const p = Math.min(Math.max(Number(pingInterval) || 60, 5), 3600); // 秒，5s ~ 1h
+  const d = Math.min(Math.max(Number(dockerInterval) || 6, 1), 168); // 小时，1h ~ 7d
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ping_interval', ?)").run(String(p));
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('docker_interval', ?)").run(String(d));
+  monitor.restartTimer();
+  restartDockerTimer();
+  res.json({ ok: true, pingInterval: p, dockerInterval: d });
+});
+
+// 启动时自动检测一轮（若有配置）
+setTimeout(scheduleDockerChecks, 2000);
+restartDockerTimer();
 
 // ---------- 生产：serve 前端构建产物（单容器/单端口部署） ----------
 const distDir = [path.join(__dirname, "..", "web", "dist"), path.join(__dirname, "public")].find((d) =>

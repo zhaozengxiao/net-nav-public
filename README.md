@@ -34,7 +34,6 @@ docker compose up -d --build
 docker compose build --build-arg GIT_COMMIT=$(git rev-parse HEAD) && docker compose up -d
 ```
 - 数据库挂载在 `./data/nav.db`，升级不丢数据
-- 后台顶部"🔄 检查更新"可对比 GitHub 最新提交
 
 ## 配置
 - 服务数据存于 `server/nav.db`（首次运行自动建库）

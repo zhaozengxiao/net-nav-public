@@ -24,18 +24,38 @@ CREATE TABLE IF NOT EXISTS services (
   sort INTEGER DEFAULT 0,
   clicks INTEGER DEFAULT 0,
   docker_container TEXT DEFAULT '',
-  docker_image TEXT DEFAULT ''
+  docker_image TEXT DEFAULT '',
+  favorite INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+CREATE TABLE IF NOT EXISTS bookmarks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  sort INTEGER DEFAULT 0,
+  path TEXT DEFAULT '[]'
+);
 `);
 
 // 迁移：旧库补列（docker_container 用于 Docker 镜像更新检测）
+// 迁移：旧库补列（逐个执行，避免一个已存在导致后面全部跳过）
+["docker_container", "docker_image"].forEach((col) => {
+  try {
+    db.prepare(`ALTER TABLE services ADD COLUMN ${col} TEXT DEFAULT ''`).run();
+  } catch {
+    /* 列已存在 */
+  }
+});
 try {
-  db.prepare("ALTER TABLE services ADD COLUMN docker_container TEXT DEFAULT ''").run();
-  db.prepare("ALTER TABLE services ADD COLUMN docker_image TEXT DEFAULT ''").run();
+  db.prepare("ALTER TABLE services ADD COLUMN favorite INTEGER DEFAULT 0").run();
+} catch {
+  /* 列已存在 */
+}
+try {
+  db.prepare("ALTER TABLE bookmarks ADD COLUMN path TEXT DEFAULT '[]'").run();
 } catch {
   /* 列已存在 */
 }

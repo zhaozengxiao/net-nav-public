@@ -7,11 +7,29 @@
 
     <!-- 顶栏 -->
     <header class="topbar">
-      <div class="brand">🛰️ 内网导航</div>
+      <div class="brand-wrap">
+        <button class="menu-btn" :class="{ active: favOpen }" title="书签" @click="favOpen = !favOpen">☰</button>
+        <div class="brand">🛰️ 内网导航</div>
+      </div>
       <div class="top-actions">
         <button class="icon-btn" title="管理后台" @click="$router.push('/admin')">⚙️</button>
       </div>
     </header>
+
+    <!-- 书签面板（圆角毛玻璃浮层，☰ 展开） -->
+    <aside class="fav-panel" :class="{ open: favOpen }">
+      <div class="fav-panel-head">
+        <span class="fav-panel-title">📑 书签</span>
+        <button class="fav-import" title="导入浏览器书签" @click="importInput?.click()">📥 导入</button>
+        <input ref="importInput" type="file" accept=".html" hidden @change="importBookmarks" />
+      </div>
+      <div class="fav-list">
+        <BmTree :nodes="bmTree" :status="bmStatus" @open="openUrl" @remove="removeBookmark" @expand="checkBookmarks" />
+        <div v-if="!bookmarks.length" class="fav-empty">
+          暂无书签<br />点 📥 导入浏览器书签<br />（浏览器导出为 HTML）
+        </div>
+      </div>
+    </aside>
 
     <!-- 时钟区 -->
     <section class="hero">
@@ -77,7 +95,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, PropType } from "vue";
+import { ElMessage } from "element-plus";
 import api from "../api";
 
 interface Service {
@@ -95,6 +114,167 @@ const services = ref<Service[]>([]);
 const keyword = ref("");
 const nowDate = ref("");
 const searchInputRef = ref<HTMLInputElement>();
+
+// 书签面板开合状态（不记忆，每次打开页面默认收起）
+const favOpen = ref(false);
+watch(favOpen, (v) => {
+  if (!v) return;
+  const closeAll = (nodes: BmNode[]) =>
+    nodes.forEach((n) => {
+      if (n.type === "folder") {
+        n.open = false;
+        closeAll(n.children);
+      }
+    });
+  closeAll(bmTree.value);
+  checkBookmarks();
+});
+const bookmarks = ref<{ id: number; name: string; url: string; path: string[] }[]>([]);
+const bmStatus = ref<Record<string, { online: boolean; ms: number }>>({});
+const importInput = ref<HTMLInputElement>();
+
+// 按需检测书签连通性：展开哪个文件夹就重新检测哪个（先重置状态再检测）
+async function checkBookmarks(urls?: string[]) {
+  let todo: string[];
+  if (urls && urls.length) {
+    todo = urls;
+    // 先重置这些书签的状态（显示为检测中）
+    const next = { ...bmStatus.value };
+    todo.forEach((u) => delete next[u]);
+    bmStatus.value = next;
+  } else {
+    // 打开面板：只检测根目录直属书签
+    todo = bookmarks.value.filter((b) => b.path.length === 0).map((b) => b.url);
+  }
+  if (!todo.length) return;
+  try {
+    // 检测中状态至少展示 300ms（内网探测太快，避免看不到"先灰后结果"的过程）
+    const [r] = await Promise.all([
+      api.post("/bookmarks/check", { urls: todo }),
+      new Promise((res) => setTimeout(res, 300)),
+    ]);
+    bmStatus.value = { ...bmStatus.value, ...r };
+  } catch {
+    /* 检测失败保持 unknown */
+  }
+}
+
+interface BmNode {
+  type: "folder" | "bookmark";
+  name: string;
+  url?: string;
+  id?: number;
+  children?: BmNode[];
+  open?: boolean;
+}
+
+// 平铺书签 -> 文件夹树
+const bmTree = computed<BmNode[]>(() => {
+  const root: BmNode[] = [];
+  const map = new Map<string, BmNode>();
+  const key = (p: string[]) => p.join("\u0000");
+  for (const b of [...bookmarks.value].sort((a, c) => a.path.length - c.path.length)) {
+    let cur = root;
+    const acc: string[] = [];
+    for (const seg of b.path) {
+      acc.push(seg);
+      const k = key(acc);
+      let node = map.get(k);
+      if (!node) {
+        node = { type: "folder", name: seg, children: [], open: false };
+        map.set(k, node);
+        cur.push(node);
+      }
+      cur = node.children!;
+    }
+    cur.push({ type: "bookmark", name: b.name, url: b.url, id: b.id });
+  }
+  return reactive(root) as BmNode[]; // 深度响应式，文件夹折叠状态可更新
+});
+
+// 递归渲染书签树（文件夹可折叠）
+const BmTree = defineComponent({
+  name: "BmTree",
+  props: {
+    nodes: { type: Array as PropType<BmNode[]>, required: true },
+    status: { type: Object as PropType<Record<string, { online: boolean; ms: number }>>, default: () => ({}) },
+  },
+  emits: ["open", "remove", "expand"],
+  setup(props, { emit }) {
+    return () =>
+      h("div", { class: "bm-tree" }, (props.nodes || []).map((n) => {
+        if (n.type === "folder") {
+          return h("div", { class: "bm-folder" }, [
+            h("button", {
+              class: "bm-folder-btn",
+              onClick: () => {
+                n.open = !n.open;
+                if (n.open) {
+                  const urls = n.children.filter((c) => c.type === "bookmark").map((c) => c.url);
+                  if (urls.length) emit("expand", urls);
+                }
+              },
+            }, [
+              h("span", { class: "bm-caret" }, n.open ? "▾" : "▸"),
+              h("span", { class: "bm-folder-name" }, `📁 ${n.name}`),
+            ]),
+            n.open && n.children?.length
+              ? h(BmTree, {
+                  nodes: n.children,
+                  status: props.status,
+                  onOpen: (u: string) => emit("open", u),
+                  onRemove: (i: number) => emit("remove", i),
+                  onExpand: (urls: string[]) => emit("expand", urls),
+                })
+              : null,
+          ]);
+        }
+        const st = props.status?.[n.url];
+        let dot = "unknown";
+        let dotTitle = "状态未知";
+        if (st) {
+          if (!st.online) { dot = "offline"; dotTitle = "离线"; }
+          else if (st.ms > 500) { dot = "slow"; dotTitle = `延迟高 ${st.ms}ms`; }
+          else { dot = "online"; dotTitle = `在线 ${st.ms}ms`; }
+        }
+        return h("div", { class: "fav-item", title: `${n.url}（${dotTitle}）`, onClick: () => emit("open", n.url) }, [
+          h("span", { class: `fav-dot ${dot}`, title: dotTitle }),
+          h("span", { class: "fav-name" }, n.name),
+        ]);
+      }));
+  },
+});
+
+function openUrl(b: string | { url: string }) {
+  const url = typeof b === "string" ? b : b.url;
+  window.open(url, "_blank");
+}
+
+// 导入浏览器书签 HTML
+async function importBookmarks(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const html = await file.text();
+  try {
+    const r = await api.post("/bookmarks/import", { html });
+    await loadBookmarks();
+    ElMessage.success(`导入完成：新增 ${r.added} 个，跳过重复 ${r.skipped} 个`);
+  } catch {
+    ElMessage.error("导入失败，请确认文件是浏览器导出的书签 HTML");
+  }
+}
+
+async function loadBookmarks() {
+  // 过滤空文件夹占位行（url 为空，仅后台用于表示空文件夹）
+  bookmarks.value = (await api.get("/bookmarks")).filter((b: any) => b.url);
+}
+
+async function removeBookmark(b: { id: number }) {
+  await api.delete(`/bookmarks/${b.id}`);
+  bookmarks.value = bookmarks.value.filter((x) => x.id !== b.id);
+}
 
 // 点击搜索框任意位置（含图标/留白）都聚焦输入框
 function focusSearch() {
@@ -115,11 +295,11 @@ const particleOptions = {
   fullScreen: { enable: false },
   fpsLimit: 60,
   particles: {
-    number: { value: 80, density: { enable: true, width: 1600, height: 900 } },
-    color: { value: ["#ffffff", "#a5c8ff", "#7dd3fc"] },
+    number: { value: 120, density: { enable: true, width: 1400, height: 800 } },
+    color: { value: ["#ffffff", "#bfdbfe", "#7dd3fc"] },
     shape: { type: "circle" },
-    opacity: { value: { min: 0.12, max: 0.7 } },
-    size: { value: { min: 1, max: 2.6 } },
+    opacity: { value: { min: 0.3, max: 0.9 } },
+    size: { value: { min: 1.5, max: 3.2 } },
     move: {
       enable: true,
       speed: 0.6,
@@ -132,8 +312,8 @@ const particleOptions = {
       enable: true,
       distance: 150,
       color: "#60a5fa",
-      opacity: 0.2,
-      width: 1,
+      opacity: 0.35,
+      width: 1.2,
     },
   },
   detectRetina: true,
@@ -260,13 +440,24 @@ onMounted(() => {
   tick();
   timer = window.setInterval(tick, 1000);
   load();
+  loadBookmarks();
   connectSSE(); // 状态实时推送，无需轮询
+  document.addEventListener("click", onClickOutside);
 });
 
 onBeforeUnmount(() => {
   clearInterval(timer);
   sse?.close();
+  document.removeEventListener("click", onClickOutside);
 });
+
+// 点击书签面板外部任意位置 → 关闭面板
+function onClickOutside(e: MouseEvent) {
+  const t = e.target as HTMLElement | null;
+  if (!t || !favOpen.value) return;
+  if (t.closest(".fav-panel") || t.closest(".menu-btn")) return; // 面板内部 / ☰ 按钮不关
+  favOpen.value = false;
+}
 </script>
 
 <style scoped>
@@ -277,7 +468,33 @@ onBeforeUnmount(() => {
 }
 
 /* 顶栏 */
+/* 顶栏菜单按钮 + 品牌 */
+.brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.menu-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.menu-btn:hover,
+.menu-btn.active {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.5);
+  background: rgba(56, 189, 248, 0.12);
+}
 .topbar {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -310,6 +527,8 @@ onBeforeUnmount(() => {
 
 /* 时钟区 */
 .hero {
+  position: relative;
+  z-index: 1;
   text-align: center;
   padding: 40px 20px 30px;
 }
@@ -425,9 +644,87 @@ onBeforeUnmount(() => {
 
 /* 内容区 */
 .content {
+  position: relative;
+  z-index: 1;
   max-width: 1200px;
   margin: 0 auto;
   padding: 10px 24px 60px;
+}
+
+/* 书签面板（圆角毛玻璃浮层） */
+.fav-panel {
+  position: fixed;
+  left: 12px;
+  top: 60px;
+  width: 250px;
+  height: auto; /* 内容自适应高度 */
+  max-height: calc(100vh - 92px); /* 内容多时不超过视口 */
+  z-index: 40;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-12px) scale(0.94);
+  transform-origin: top left;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.fav-panel.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.fav-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--card-border);
+}
+.fav-panel-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.fav-import {
+  border: 1px solid var(--card-border);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-dim);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.fav-import:hover {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.5);
+}
+.fav-list {
+  flex: 1;
+  padding: 6px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: calc(100vh - 160px); /* 内容超限时列表内部滚动 */
+}
+.fav-empty {
+  font-size: 13px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 26px 8px;
+  line-height: 2;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+  border-radius: 12px;
+  margin: 10px;
 }
 
 /* 卡片 */
@@ -653,6 +950,12 @@ onBeforeUnmount(() => {
   }
   .content {
     padding: 0 14px 40px;
+  }
+  .fav-panel {
+    top: 50px;
+    left: 10px;
+    width: 78vw;
+    max-width: 260px;
   }
   .cards {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));

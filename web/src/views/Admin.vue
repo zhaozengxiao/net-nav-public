@@ -4,7 +4,6 @@
     <div class="admin-header">
       <h1>⚙️ 管理后台</h1>
       <div class="header-btns">
-        <el-button :loading="checking" @click="checkUpdate">🔄 检查更新</el-button>
         <el-button @click="$router.push('/')">查看导航页</el-button>
       </div>
     </div>
@@ -16,6 +15,7 @@
           <el-button type="primary" @click="openService()">➕ 新增服务</el-button>
           <el-button type="success" plain @click="openScan()">🔍 自动发现</el-button>
           <el-button plain @click="openDockerCfg()">🐳 Docker 设置</el-button>
+          <el-button plain @click="openMonCfg()">⏱️ 检测设置</el-button>
           <el-button plain :loading="dockerChecking" @click="refreshDocker">🔄 刷新 Docker 检测</el-button>
         </div>
 
@@ -101,7 +101,89 @@
           <div v-if="services.length === 0" class="m-empty">暂无服务，点上方按钮新增</div>
         </div>
       </el-tab-pane>
+
+      <!-- ===== 书签管理 ===== -->
+      <el-tab-pane label="书签管理" name="bookmarks">
+        <div class="toolbar">
+          <el-button type="primary" @click="bmFileInput?.click()">📥 导入书签 HTML</el-button>
+          <el-button @click="openNewFolder">➕ 新建文件夹</el-button>
+          <el-button type="danger" plain :disabled="!bookmarks.length" @click="clearBookmarks">🗑️ 清空全部</el-button>
+          <span class="bm-count">共 {{ bmCount }} 条</span>
+        </div>
+        <input ref="bmFileInput" type="file" accept=".html,text/html" style="display: none" @change="onImportBmFile" />
+        <div ref="bmTreeEl" class="bm-tree-wrap">
+          <div v-if="bookmarks.length === 0" class="m-empty">暂无书签，可导入浏览器导出的书签 HTML</div>
+          <div
+            v-for="row in treeRows"
+            :key="row.type + (row.id || row.path.join('/'))"
+            class="bm-tree-row"
+            :class="{ 'is-folder': row.type === 'folder' }"
+            :style="{ paddingLeft: 8 + row.depth * 22 + 'px' }"
+            :data-id="row.id || ''"
+            :data-path="JSON.stringify(row.path)"
+            :data-parent="parentKey(row)"
+          >
+            <template v-if="row.type === 'folder'">
+              <span class="bm-drag" title="拖动排序">⠿</span>
+              <span class="bm-caret" @click="toggleFolder(row)">{{ row.open ? "▾" : "▸" }}</span>
+              <span class="bm-folder-ico">📁</span>
+              <span class="bm-tree-name">{{ row.name }}</span>
+              <span class="bm-tree-count">{{ row.count }} 条</span>
+              <span class="bm-tree-ops">
+                <el-button size="small" @click="renameFolder(row)">重命名</el-button>
+                <el-button size="small" type="danger" plain @click="deleteFolder(row)">删除</el-button>
+              </span>
+            </template>
+            <template v-else>
+              <span class="bm-drag" title="拖动排序">⠿</span>
+              <span class="bm-caret bm-caret-empty"></span>
+              <span class="bm-dot"></span>
+              <span class="bm-tree-name">{{ row.name }}</span>
+              <a :href="row.url" target="_blank" class="bm-url" rel="noopener">{{ row.url }}</a>
+              <span class="bm-tree-ops">
+                <el-button size="small" @click="openBmEdit({ id: row.id, name: row.name, url: row.url })">编辑</el-button>
+                <el-button size="small" type="danger" plain @click="removeBookmark({ id: row.id, name: row.name })">删除</el-button>
+              </span>
+            </template>
+          </div>
+        </div>
+      </el-tab-pane>
     </el-tabs>
+
+    <!-- 编辑书签对话框 -->
+    <el-dialog v-model="bmEditDlg" title="✏️ 编辑书签" :width="'min(420px, 94vw)'">
+      <el-form label-width="60px">
+        <el-form-item label="名称">
+          <el-input v-model="bmEditForm.name" placeholder="书签名称" />
+        </el-form-item>
+        <el-form-item label="网址">
+          <el-input v-model="bmEditForm.url" placeholder="https://..." />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="bmEditDlg = false">取消</el-button>
+        <el-button type="primary" @click="saveBmEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新建文件夹对话框 -->
+    <el-dialog v-model="newFolderDlg" title="📁 新建文件夹" :width="'min(420px, 94vw)'">
+      <el-form label-width="70px">
+        <el-form-item label="名称">
+          <el-input v-model="newFolderForm.name" placeholder="文件夹名称" />
+        </el-form-item>
+        <el-form-item label="父文件夹">
+          <el-select v-model="newFolderForm.parent" placeholder="选择父文件夹" style="width: 100%">
+            <el-option label="根目录" :value="''" />
+            <el-option v-for="f in folderOptions" :key="f.join('/')" :label="f.join(' / ')" :value="JSON.stringify(f)" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="newFolderDlg = false">取消</el-button>
+        <el-button type="primary" @click="saveNewFolder">创建</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 自动发现对话框 -->
     <el-dialog v-model="scanDlg" title="🔍 自动发现内网服务" :width="'min(640px, 96vw)'">
@@ -134,6 +216,26 @@
         </div>
       </div>
       <div v-if="scanError" class="scan-error">{{ scanError }}</div>
+    </el-dialog>
+
+    <!-- 检测设置对话框 -->
+    <el-dialog v-model="monCfgDlg" title="⏱️ 检测设置" :width="'min(420px, 94vw)'">
+      <el-form label-width="110px" @submit.prevent>
+        <el-form-item label="Ping 间隔">
+          <el-input-number v-model="monCfg.pingInterval" :min="5" :max="3600" />
+          <span class="cfg-unit">秒</span>
+          <div class="cfg-tip">服务在线状态探测间隔（默认 60 秒，最小 5 秒）</div>
+        </el-form-item>
+        <el-form-item label="Docker 间隔">
+          <el-input-number v-model="monCfg.dockerInterval" :min="1" :max="168" />
+          <span class="cfg-unit">小时</span>
+          <div class="cfg-tip">容器镜像更新检测间隔（默认 6 小时）</div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="monCfgDlg = false">取消</el-button>
+        <el-button type="primary" @click="saveMonCfg">保存</el-button>
+      </template>
     </el-dialog>
 
     <!-- Docker SSH 设置对话框 -->
@@ -189,7 +291,7 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Edit, Delete } from "@element-plus/icons-vue";
 import Sortable from "sortablejs";
@@ -211,6 +313,26 @@ const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", col
 const dockerCfgDlg = ref(false);
 const dockerCfg = ref({ host: "", port: 22, user: "", pass: "" });
 const dockerChecking = ref(false);
+
+// ---- 检测设置 ----
+const monCfgDlg = ref(false);
+const monCfg = ref({ pingInterval: 60, dockerInterval: 6 });
+
+function openMonCfg() {
+  api.get("/admin/monitor-config").then((r) => {
+    monCfg.value = r;
+    monCfgDlg.value = true;
+  }).catch((e) => handleErr(e));
+}
+async function saveMonCfg() {
+  try {
+    await api.put("/admin/monitor-config", monCfg.value);
+    ElMessage.success("已保存，检测间隔已生效");
+    monCfgDlg.value = false;
+  } catch (e) {
+    handleErr(e);
+  }
+}
 
 function openDockerCfg() {
   api.get("/admin/docker-config").then((r) => {
@@ -237,29 +359,6 @@ async function refreshDocker() {
     handleErr(e);
   } finally {
     dockerChecking.value = false;
-  }
-}
-
-// ---- 版本更新检测 ----
-const checking = ref(false);
-async function checkUpdate() {
-  checking.value = true;
-  try {
-    const r = await api.get("/update");
-    if (r.error) return ElMessage.warning(r.error);
-    if (r.hasUpdate) {
-      await ElMessageBox.alert(
-        `检测到新版本！\n\n本地版本：${r.local.slice(0, 7)}\n最新版本：${r.remote.slice(0, 7)}\n\n更新方式：在服务器执行 git pull，或重新构建 Docker 镜像。`,
-        "🆕 有更新可用",
-        { confirmButtonText: "知道了" }
-      );
-    } else {
-      ElMessage.success(`已是最新版本（${(r.local || "?").slice(0, 7)}）`);
-    }
-  } catch (e) {
-    handleErr(e);
-  } finally {
-    checking.value = false;
   }
 }
 
@@ -425,6 +524,437 @@ function handleErr(e: any) {
 async function loadAll() {
   try {
     services.value = await api.get("/services");
+  } catch (e) {
+    handleErr(e);
+  }
+  loadBookmarks();
+}
+
+// ---- 书签管理 ----
+const bmFileInput = ref<HTMLInputElement>();
+const bookmarks = ref<any[]>([]);
+
+async function loadBookmarks() {
+  try {
+    bookmarks.value = await api.get("/bookmarks");
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+function onImportBmFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await api.post("/bookmarks/import", { html: String(reader.result) });
+      ElMessage.success(`导入完成：新增 ${r.added} 条，跳过重复 ${r.skipped} 条`);
+      loadBookmarks();
+    } catch (err) {
+      handleErr(err);
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function removeBookmark(row: any) {
+  try {
+    await ElMessageBox.confirm(`删除书签「${row.name}」？`, "确认删除", { type: "warning" });
+  } catch {
+    return;
+  }
+  try {
+    await api.delete(`/bookmarks/${row.id}`);
+    ElMessage.success("已删除");
+    loadBookmarks();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+async function clearBookmarks() {
+  try {
+    await ElMessageBox.confirm(
+      `确定清空全部 ${bookmarks.value.length} 条书签？此操作不可恢复！`,
+      "危险操作",
+      { type: "error", confirmButtonText: "清空", confirmButtonClass: "el-button--danger" }
+    );
+  } catch {
+    return;
+  }
+  for (const b of [...bookmarks.value]) {
+    await api.delete(`/bookmarks/${b.id}`).catch(() => {});
+  }
+  ElMessage.success("已清空");
+  loadBookmarks();
+}
+
+// ---- 编辑书签 ----
+const bmEditDlg = ref(false);
+const bmEditForm = ref({ id: 0, name: "", url: "" });
+
+function openBmEdit(row: any) {
+  bmEditForm.value = { id: row.id, name: row.name, url: row.url };
+  bmEditDlg.value = true;
+}
+
+async function saveBmEdit() {
+  const name = bmEditForm.value.name.trim();
+  const url = bmEditForm.value.url.trim();
+  if (!name) return ElMessage.warning("名称不能为空");
+  if (!/^https?:\/\//.test(url)) return ElMessage.warning("网址需以 http(s):// 开头");
+  try {
+    await api.put(`/bookmarks/${bmEditForm.value.id}`, { name, url });
+    ElMessage.success("已保存");
+    bmEditDlg.value = false;
+    loadBookmarks();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+// ---- 树形列表（文件夹展开/折叠，书签缩进在文件夹下） ----
+const folderOpen = reactive(new Map<string, boolean>());
+
+interface BmRow {
+  type: "folder" | "bookmark";
+  path: string[];
+  name: string;
+  url?: string;
+  id?: number;
+  depth: number;
+  open: boolean;
+  count: number;
+}
+
+function allFolderPaths() {
+  const set = new Set<string>();
+  const arr: string[][] = [];
+  bookmarks.value.forEach((b) => {
+    const p = b.path || [];
+    for (let i = 1; i <= p.length; i++) {
+      const key = JSON.stringify(p.slice(0, i));
+      if (!set.has(key)) {
+        set.add(key);
+        arr.push(p.slice(0, i));
+      }
+    }
+  });
+  return arr.sort((a, b) => a.length - b.length || a.join("/").localeCompare(b.join("/")));
+}
+
+const realBookmarks = computed(() => bookmarks.value.filter((b: any) => b.url));
+const bmCount = computed(() => realBookmarks.value.length);
+
+const treeRows = computed<BmRow[]>(() => {
+  const rows: BmRow[] = [];
+  const folders = allFolderPaths();
+  const keyOf = (p: string[]) => JSON.stringify(p);
+  const countTree = (p: string[]) =>
+    realBookmarks.value.filter((b: any) => {
+      const bp = b.path || [];
+      return bp.length >= p.length && p.every((seg, i) => bp[i] === seg);
+    }).length;
+
+  const pushFolder = (p: string[], depth: number) => {
+    const open = folderOpen.get(keyOf(p)) ?? false;
+    rows.push({ type: "folder", path: p, name: p[p.length - 1], depth, open, count: countTree(p) });
+    if (!open) return;
+    // 直属书签（过滤占位行）
+    realBookmarks.value
+      .filter((b: any) => keyOf(b.path || []) === keyOf(p))
+      .forEach((b: any) => rows.push({ type: "bookmark", path: p, name: b.name, url: b.url, id: b.id, depth: depth + 1, open: false, count: 0 }));
+    // 子文件夹
+    folders
+      .filter((cp) => cp.length === p.length + 1 && p.every((seg, i) => cp[i] === seg))
+      .forEach((cp) => pushFolder(cp, depth + 1));
+  };
+
+  // 根目录直属书签（过滤占位行）
+  realBookmarks.value
+    .filter((b: any) => (b.path || []).length === 0)
+    .forEach((b: any) => rows.push({ type: "bookmark", path: [], name: b.name, url: b.url, id: b.id, depth: 0, open: false, count: 0 }));
+  // 顶层文件夹
+  folders.filter((p) => p.length === 1).forEach((p) => pushFolder(p, 0));
+  return rows;
+});
+
+function toggleFolder(row: BmRow) {
+  folderOpen.set(JSON.stringify(row.path), !row.open);
+}
+
+function parentKey(row: BmRow) {
+  return JSON.stringify(row.type === "folder" ? row.path.slice(0, -1) : row.path);
+}
+
+// ---- 新建文件夹 ----
+const newFolderDlg = ref(false);
+const newFolderForm = ref({ name: "", parent: "" });
+const folderOptions = computed(() => allFolderPaths());
+
+function openNewFolder() {
+  newFolderForm.value = { name: "", parent: "" };
+  newFolderDlg.value = true;
+}
+
+async function saveNewFolder() {
+  const name = newFolderForm.value.name.trim();
+  if (!name) return ElMessage.warning("文件夹名称不能为空");
+  const parent = newFolderForm.value.parent ? JSON.parse(newFolderForm.value.parent) : [];
+  try {
+    await api.post("/bookmarks/new-folder", { parent, name });
+    ElMessage.success(`已创建文件夹「${name}」`);
+    newFolderDlg.value = false;
+    await loadBookmarks();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+// ---- 拖动排序 ----
+const bmTreeEl = ref<HTMLElement | null>(null);
+let bmSortable: Sortable | null = null;
+const movedPaths = new Map<number, string[]>(); // 待持久化的书签路径迁移
+let hoverFolderPath: string[] | null = null; // 拖动书签时悬停的目标文件夹（中部=拖入）
+let hoverFolderKey: string | null = null; // 当前高亮的文件夹 path（JSON 字符串），用于全量匹配真实行
+let dragActive = false; // 当前是否正在拖动（document mousemove 仅拖动中生效）
+
+// 拖动中实时计算鼠标所在文件夹行 → 高亮"拖入"目标（原生 mousemove，比 Sortable onMove 更实时可靠）
+function updateHoverTarget(e: MouseEvent) {
+  const el = bmTreeEl.value;
+  if (!el) return;
+  const draggedEl = el.querySelector(".bm-tree-row.dragging") as HTMLElement | null;
+  let target: HTMLElement | null = null;
+  if (draggedEl && !draggedEl.classList.contains("is-folder")) {
+    const rows = [...el.querySelectorAll(".bm-tree-row.is-folder")] as HTMLElement[];
+    for (const row of rows) {
+      const r = row.getBoundingClientRect();
+      if (e.clientY >= r.top && e.clientY <= r.bottom && e.clientX >= r.left && e.clientX <= r.right) {
+        const frac = r.height ? (e.clientY - r.top) / r.height : 0.5;
+        if (frac > 0.12 && frac < 0.88) { target = row; break; }
+      }
+    }
+  }
+  const targetKey = target ? JSON.stringify(JSON.parse(target.dataset.path || "[]")) : null;
+  if (targetKey !== hoverFolderKey) {
+    document.querySelectorAll(".bm-tree-row.is-folder").forEach((r) => {
+      r.classList.toggle("hover-into", r.dataset.path === targetKey);
+    });
+    hoverFolderKey = targetKey;
+  }
+  if (target) {
+    el.classList.add("dragging-into");
+    hoverFolderPath = JSON.parse(target.dataset.path || "[]");
+  } else {
+    el.classList.remove("dragging-into");
+    hoverFolderPath = null;
+  }
+}
+
+function initBmSortable() {
+  const el = bmTreeEl.value;
+  if (!el) return;
+  document.addEventListener("mousemove", updateHoverTarget);
+  bmSortable?.destroy();
+  bmSortable = new Sortable(el, {
+    animation: 180,
+    handle: ".bm-drag",
+    ghostClass: "sortable-ghost",
+    onMove: (evt) => {
+      const dragged = evt.dragged as HTMLElement;
+      const related = evt.related as HTMLElement | null;
+      // 高亮/拖入目标由 document mousemove（updateHoverTarget）实时计算
+      if (related) updateHoverTarget(evt.originalEvent as MouseEvent);
+      if (dragged.classList.contains("is-folder")) {
+        const draggedPath: string[] = JSON.parse(dragged.dataset.path || "[]");
+        const relatedPath: string[] = related.classList.contains("is-folder")
+          ? JSON.parse(related.dataset.path || "[]")
+          : JSON.parse(related.dataset.parent || "[]");
+        if (relatedPath.length > draggedPath.length && draggedPath.every((s, i) => relatedPath[i] === s)) {
+          return false; // 目标在自身子树内
+        }
+      }
+      return true;
+    },
+    onStart: (evt) => {
+      evt.item.classList.add("dragging");
+      dragActive = true;
+    },
+    onEnd: (evt) => {
+      dragActive = false;
+      evt.item.classList.remove("dragging");
+      const el = bmTreeEl.value;
+      if (!el) return;
+      const domRows = [...el.querySelectorAll(".bm-tree-row")] as HTMLElement[];
+      const item = evt.item as HTMLElement;
+      // 新父级 = 插入位置前面最近一行的父级（folder 行为其父级，bookmark 行为所在文件夹）
+      const idx = domRows.indexOf(item);
+      let newParent: string[] = [];
+      for (let i = idx - 1; i >= 0; i--) {
+        newParent = JSON.parse(domRows[i].dataset.parent || "[]");
+        break;
+      }
+      const isFolder = item.classList.contains("is-folder");
+      if (isFolder) {
+        // 文件夹：自身及子树全部书签的路径整体迁移
+        const oldPath: string[] = JSON.parse(item.dataset.path || "[]");
+        const newPath = [...newParent, oldPath[oldPath.length - 1]];
+        if (JSON.stringify(oldPath) !== JSON.stringify(newPath)) {
+          let moved = 0;
+          for (const b of bookmarks.value) {
+            const bp: string[] = b.path || [];
+            if (bp.length >= oldPath.length && oldPath.every((s, i) => bp[i] === s)) {
+              b.path = [...newPath, ...bp.slice(oldPath.length)];
+              movedPaths.set(b.id, b.path);
+              moved++;
+            }
+          }
+          item.dataset.path = JSON.stringify(newPath);
+          item.dataset.parent = JSON.stringify(newParent);
+          ElMessage.success(`文件夹已移动到「${newParent.length ? newParent.join(" / ") : "根目录"}」，影响 ${moved} 条书签`);
+        }
+      } else {
+        const b = bookmarks.value.find((x: any) => x.id === Number(item.dataset.id));
+        // 拖入文件夹（悬停中部）：path 迁移 + 移到目标文件夹子树开头
+        // 先验证 item 与目标文件夹行 DOM 相邻（防止拖动"经过"文件夹中部时误触发）
+        if (b && hoverFolderPath && JSON.stringify(b.path || []) !== JSON.stringify(hoverFolderPath)) {
+          const hIdx = domRows.findIndex((r) => r.classList.contains("is-folder") && r.dataset.path === JSON.stringify(hoverFolderPath));
+          const near = hIdx >= 0 && Math.abs(idx - hIdx) <= 1;
+          if (!near) hoverFolderPath = null; // 不相邻 → 误触发，退回兄弟排序逻辑
+        }
+        if (b && hoverFolderPath && JSON.stringify(b.path || []) !== JSON.stringify(hoverFolderPath)) {
+          b.path = [...hoverFolderPath];
+          movedPaths.set(b.id, b.path);
+          const oldIdx = bookmarks.value.findIndex((x: any) => x.id === b.id);
+          bookmarks.value.splice(oldIdx, 1);
+          const fidx = bookmarks.value.findIndex((x: any) => {
+            const pp: string[] = x.path || [];
+            return pp.length >= hoverFolderPath.length && hoverFolderPath!.every((sg, i) => pp[i] === sg);
+          });
+          if (fidx >= 0) bookmarks.value.splice(fidx + 1, 0, b);
+          else bookmarks.value.push(b);
+          folderOpen.set(JSON.stringify(hoverFolderPath), true); // 展开目标文件夹看到结果
+          ElMessage.success(`已移入「${hoverFolderPath.join(" / ")}」`);
+        } else if (b && JSON.stringify(b.path || []) !== JSON.stringify(newParent)) {
+          // 书签：按插入位置迁移父级（兄弟逻辑）
+          item.dataset.parent = JSON.stringify(newParent);
+          item.dataset.path = JSON.stringify(newParent);
+          b.path = newParent;
+          movedPaths.set(b.id, newParent);
+          ElMessage.success(`已移动到「${newParent.length ? newParent.join(" / ") : "根目录"}」`);
+        }
+      }
+      if (hoverFolderKey) {
+        document.querySelectorAll(".bm-tree-row.is-folder").forEach((r) => r.classList.remove("hover-into"));
+        hoverFolderKey = null;
+      }
+      el.classList.remove("dragging-into");
+      hoverFolderPath = null;
+      applyDomOrder();
+    },
+  });
+}
+
+// 按 DOM 可见顺序重排同父级项，其余子树保持原数组顺序
+async function applyDomOrder() {
+  await nextTick(); // 等待 DOM 反映 bookmarks 数组变更（拖入文件夹等）
+  const el = bmTreeEl.value;
+  if (!el) return;
+  const domRows = [...el.querySelectorAll(".bm-tree-row")] as HTMLElement[];
+  const byParent = new Map<string, { type: string; path: string[]; id: number }[]>();
+  for (const r of domRows) {
+    const type = r.classList.contains("is-folder") ? "folder" : "bookmark";
+    const path = JSON.parse(r.dataset.path || "[]");
+    const parent = r.dataset.parent || "[]";
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent)!.push({ type, path, id: Number(r.dataset.id) || 0 });
+  }
+  const newArr: any[] = [];
+  const pushed = new Set<number>();
+  const processParent = (pk: string) => {
+    const items = byParent.get(pk);
+    if (items && items.length) {
+      for (const item of items) {
+        if (item.type === "bookmark") {
+          const b = bookmarks.value.find((x: any) => x.id === item.id);
+          if (b && !pushed.has(b.id)) {
+            newArr.push(b);
+            pushed.add(b.id);
+          }
+        } else {
+          processParent(JSON.stringify(item.path));
+        }
+      }
+    } else {
+      // 该父级折叠不可见：按数组原顺序整体追加子树
+      const p = pk === "[]" ? [] : JSON.parse(pk);
+      for (const b of bookmarks.value) {
+        if (pushed.has(b.id)) continue;
+        const bp = b.path || [];
+        if (bp.length >= p.length && p.every((seg, i) => bp[i] === seg)) {
+          newArr.push(b);
+          pushed.add(b.id);
+        }
+      }
+    }
+  };
+  processParent("[]");
+  for (const b of bookmarks.value) if (!pushed.has(b.id)) newArr.push(b);
+  bookmarks.value = newArr;
+  const paths: Record<number, string[]> = {};
+  movedPaths.forEach((p, id) => (paths[id] = p));
+  api.post("/bookmarks/reorder", { ids: newArr.map((b) => b.id), paths })
+    .then(() => {
+      movedPaths.clear();
+    })
+    .catch((e: any) => console.error("[bm-reorder] err:", e?.message || e));
+}
+
+watch(treeRows, () => initBmSortable());
+
+async function renameFolder(f: any) {
+  const oldName = f.path[f.path.length - 1];
+  let value: string;
+  try {
+    const r = await ElMessageBox.prompt("输入新名称", `重命名文件夹「${oldName}」`, {
+      inputValue: oldName,
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+      inputValidator: (v: string) => (v && v.trim() ? true : "名称不能为空"),
+    });
+    value = r.value.trim();
+  } catch {
+    return;
+  }
+  if (value === oldName) return;
+  try {
+    const r = await api.post("/bookmarks/rename-folder", { oldPath: f.path, newName: value });
+    ElMessage.success(`已重命名，影响 ${r.changed} 条书签`);
+    await loadBookmarks();
+    listFolders();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+async function deleteFolder(f: any) {
+  try {
+    await ElMessageBox.confirm(
+      `删除文件夹「${f.path.join(" / ")}」？其下 ${f.count} 条书签（含子文件夹）将一并删除，不可恢复！`,
+      "删除文件夹",
+      { type: "error", confirmButtonText: "删除" }
+    );
+  } catch {
+    return;
+  }
+  try {
+    const r = await api.post("/bookmarks/delete-folder", { path: f.path });
+    ElMessage.success(`已删除 ${r.removed} 条书签`);
+    await loadBookmarks();
+    listFolders();
   } catch (e) {
     handleErr(e);
   }
@@ -681,6 +1211,17 @@ async function removeService(row: any) {
 .t-dash {
   color: var(--text-dim);
 }
+.cfg-unit {
+  margin-left: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.cfg-tip {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
 
 /* ===== 移动端卡片列表 ===== */
 .card-list {
@@ -803,6 +1344,135 @@ async function removeService(row: any) {
 .color-dot.active {
   border-color: #fff;
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.6);
+}
+
+/* ===== 书签管理 ===== */
+.bm-count {
+  margin-left: auto;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.bm-name {
+  font-weight: 600;
+}
+.bm-url {
+  color: var(--accent, #38bdf8);
+  text-decoration: none;
+  word-break: break-all;
+}
+.bm-url:hover {
+  text-decoration: underline;
+}
+.bm-path {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.bm-root {
+  color: var(--text-dim);
+  font-size: 12px;
+  opacity: 0.7;
+}
+.bm-tree-wrap {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 8px 6px;
+  overflow-x: auto;
+}
+.bm-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 10px;
+  border-radius: 10px;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.bm-tree-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.bm-tree-row.is-folder {
+  font-weight: 600;
+}
+.bm-tree-row.dragging {
+  opacity: 0.4;
+}
+.bm-tree-row.hover-into {
+  background: rgba(100, 160, 255, 0.16) !important;
+  outline: 2px solid rgba(100, 160, 255, 0.65);
+  outline-offset: -2px;
+}
+.bm-tree-wrap.dragging-into .sortable-ghost {
+  opacity: 0 !important;
+}
+.bm-tree-row.hover-into .bm-folder-name::after {
+  content: " ⤵ 拖入";
+  color: rgba(100, 160, 255, 0.9);
+  font-size: 11px;
+  margin-left: 4px;
+}
+.sortable-ghost {
+  opacity: 0.55 !important;
+  background: rgba(100, 160, 255, 0.12) !important;
+  outline: 2px dashed rgba(100, 160, 255, 0.7);
+  outline-offset: -2px;
+}
+.sortable-ghost * {
+  pointer-events: none;
+}
+.bm-drag {
+  color: var(--text-dim);
+  opacity: 0.45;
+  cursor: grab;
+  flex-shrink: 0;
+  font-size: 12px;
+  user-select: none;
+}
+.bm-tree-row:hover .bm-drag {
+  opacity: 0.9;
+}
+.bm-drag:active {
+  cursor: grabbing;
+}
+.bm-caret {
+  width: 14px;
+  text-align: center;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  user-select: none;
+}
+.bm-caret-empty {
+  cursor: default;
+}
+.bm-folder-ico {
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.bm-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.6;
+  flex-shrink: 0;
+  margin-left: 3px;
+}
+.bm-tree-name {
+  font-size: 13.5px;
+  flex-shrink: 0;
+}
+.bm-tree-count {
+  color: var(--text-dim);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.bm-tree-ops {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* ===== 移动端整体 ===== */

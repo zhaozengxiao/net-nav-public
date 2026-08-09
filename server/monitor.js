@@ -50,8 +50,22 @@ async function runProbe() {
   return changed;
 }
 
-// 立即探测 + 每 60 秒循环
-runProbe();
-setInterval(runProbe, 60 * 1000);
+// 立即探测 + 定时循环（间隔可在后台设置，默认 60 秒）
+let timer = null;
 
-module.exports = { cache, probe, setOnChange };
+function getIntervalMs() {
+  const row = db.prepare("SELECT value FROM settings WHERE key='ping_interval'").get();
+  const n = Number(row?.value);
+  return Number.isFinite(n) && n >= 5 ? n * 1000 : 60 * 1000;
+}
+
+function restartTimer() {
+  if (timer) clearInterval(timer);
+  timer = setInterval(runProbe, getIntervalMs());
+  console.log(`[monitor] ping 间隔：${getIntervalMs() / 1000}s`);
+}
+
+runProbe();
+restartTimer();
+
+module.exports = { cache, probe, setOnChange, restartTimer };
