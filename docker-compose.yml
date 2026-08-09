@@ -1,0 +1,13 @@
+services:
+  net-nav:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+    image: net-nav:latest
+    container_name: net-nav
+    ports:
+      - "6666:6666"
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data   # 数据库持久化

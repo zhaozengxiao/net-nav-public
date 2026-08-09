@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时数据（本地数据库、日志，勿上传）
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.log
+
+# 环境与密钥
+.env
+.env.local
+*.pem
+
+# 系统文件
+.DS_Store
+Thumbs.db
