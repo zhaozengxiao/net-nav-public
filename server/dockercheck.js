@@ -70,36 +70,68 @@ function httpsGet(url, headers = {}) {
   });
 }
 
-// 解析镜像名 -> { repo, tag }（默认 latest）
+// 解析镜像名 -> { registry, repo, tag }（registry 默认 Docker Hub）
+// 规则：第一个 "/" 前的段含 "." 或 ":" 时视为 registry（如 ghcr.io / mcr.microsoft.com / localhost:5000）
 function parseImage(image) {
-  let repo = image.trim();
+  let name = image.trim();
   let tag = "latest";
-  // 去掉 registry 前缀中的端口与斜杠之间的部分，但保留 repo 路径
-  if (repo.includes("@")) repo = repo.split("@")[0];
-  const slashIdx = repo.lastIndexOf("/");
-  const colonIdx = repo.lastIndexOf(":");
+  if (name.includes("@")) name = name.split("@")[0];
+  const slashIdx = name.lastIndexOf("/");
+  const colonIdx = name.lastIndexOf(":");
   if (colonIdx > slashIdx) {
-    tag = repo.slice(colonIdx + 1);
-    repo = repo.slice(0, colonIdx);
+    tag = name.slice(colonIdx + 1);
+    name = name.slice(0, colonIdx);
   }
-  return { repo, tag };
+  const firstSlash = name.indexOf("/");
+  let registry = null;
+  let repo = name;
+  if (firstSlash > -1) {
+    const head = name.slice(0, firstSlash);
+    if (head.includes(".") || head.includes(":")) {
+      registry = head;
+      repo = name.slice(firstSlash + 1);
+    }
+  }
+  if (!registry) {
+    registry = "registry-1.docker.io";
+    // Docker Hub 官方镜像在 registry 中路径为 library/<repo>
+    if (!repo.includes("/")) repo = `library/${repo}`;
+  }
+  return { registry, repo, tag };
 }
 
-// 查 registry 最新 manifest digest（多架构取 manifest list 的 digest）
-async function getRegistryDigest(image) {
-  let { repo, tag } = parseImage(image);
-  // Docker Hub 官方镜像在 registry 中路径为 library/<repo>
-  if (!repo.includes("/")) repo = `library/${repo}`;
-  const registry = "registry-1.docker.io";
-  const authUrl = `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${encodeURIComponent(repo)}:pull`;
-  const auth = await httpsGet(authUrl);
-  if (auth.status !== 200) return { ok: false, reason: "auth" };
+// 解析 WWW-Authenticate 挑战头（Bearer realm/service/scope）-> 取 token
+async function fetchToken(challenge, repo) {
+  const m = challenge.match(/realm="([^"]+)"/i);
+  if (!m) return { ok: false, reason: "no_realm" };
+  const realm = m[1];
+  const service = (challenge.match(/service="([^"]+)"/i) || [])[1];
+  const scope = (challenge.match(/scope="([^"]+)"/i) || [])[1] || `repository:${repo}:pull`;
+  const params = new URLSearchParams({ scope });
+  if (service) params.set("service", service);
+  const auth = await httpsGet(`${realm}?${params.toString()}`);
+  if (auth.status !== 200) return { ok: false, reason: `auth_${auth.status}` };
   const token = JSON.parse(auth.body).token;
+  if (!token) return { ok: false, reason: "no_token" };
+  return { ok: true, token };
+}
+
+// 查任意 registry 最新 manifest digest（OCI Distribution 标准流程）
+// 匿名请求 -> 401 时解析 WWW-Authenticate 取 token -> 带 token 重试
+async function getRegistryDigest(image) {
+  let { registry, repo, tag } = parseImage(image);
   const manifestUrl = `https://${registry}/v2/${repo}/manifests/${encodeURIComponent(tag)}`;
-  const res = await httpsGet(manifestUrl, {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
-  });
+  const headers = {
+    Accept:
+      "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json",
+  };
+  let res = await httpsGet(manifestUrl, headers);
+  if (res.status === 401) {
+    const challenge = res.headers["www-authenticate"] || "";
+    const tok = await fetchToken(challenge, repo);
+    if (!tok.ok) return { ok: false, reason: tok.reason };
+    res = await httpsGet(manifestUrl, { ...headers, Authorization: `Bearer ${tok.token}` });
+  }
   if (res.status !== 200) return { ok: false, reason: `http_${res.status}` };
   const digest = res.headers["docker-content-digest"];
   if (!digest) return { ok: false, reason: "nodigest" };
