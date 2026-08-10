@@ -39,6 +39,13 @@
         <button class="ctx-item" @click="ctxRename">✏️ 重命名文件夹</button>
         <button class="ctx-item danger" @click="ctxDelete">🗑️ 删除文件夹</button>
       </template>
+      <template v-else-if="ctxMenu.target.type === 'service'">
+        <button class="ctx-item" @click="ctxOpen">🔗 打开</button>
+        <button class="ctx-item" @click="ctxRename">✏️ 重命名</button>
+        <button class="ctx-item" @click="ctxEditDesc">📝 编辑描述</button>
+        <button class="ctx-item" @click="ctxEditUrl">🌐 修改网址</button>
+        <button class="ctx-item danger" @click="ctxDelete">🗑️ 删除</button>
+      </template>
       <template v-else>
         <button class="ctx-item" @click="ctxOpen">🔗 打开</button>
         <button class="ctx-item" @click="ctxRename">✏️ 重命名</button>
@@ -464,11 +471,27 @@ async function ctxRename() {
     /* 取消 */
   }
 }
+async function ctxEditDesc() {
+  const t = ctxMenu.value?.target;
+  closeCtx(); // 先关右键菜单，再弹输入框
+  if (!t || t.type !== "service") return;
+  try {
+    const { value } = await ElMessageBox.prompt("服务描述（显示在卡片上）", "编辑描述", {
+      inputValue: t.svc.description || "",
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+    });
+    await api.put(`/admin/services/${t.id}`, { description: value.trim() });
+    t.svc.description = value.trim();
+    ElMessage.success("已保存描述");
+  } catch {
+    /* 取消 */
+  }
+}
 async function ctxEditUrl() {
   const t = ctxMenu.value?.target;
   closeCtx(); // 先关右键菜单，再弹输入框
-  if (!t || t.type === "folder") return;
-  try {
+  if (!t || t.type === "folder") return;  try {
     const { value } = await ElMessageBox.prompt("新的网址（含 http(s)://）", "修改网址", {
       inputValue: t.url,
       confirmButtonText: "保存",
