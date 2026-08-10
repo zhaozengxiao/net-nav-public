@@ -25,6 +25,36 @@ cd web && npm install && npm run dev
 cd web && npm run build
 ```
 
+## 一键拉取镜像（GHCR）
+镜像由 GitHub Actions 自动构建发布：`ghcr.io/zhaozengxiao/net-nav`（标签 `latest` + 提交短哈希 + `v*` 版本号）
+
+```bash
+# 方式一：docker run 一键启动（推荐映射 8080，避免 6666 被 Chrome 判定为不安全端口）
+docker pull ghcr.io/zhaozengxiao/net-nav:latest
+docker run -d --name net-nav \
+  -p 8080:6666 \
+  -v $(pwd)/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/zhaozengxiao/net-nav:latest
+# 访问 http://服务器IP:8080 ，后台 /admin
+
+# 方式二：docker compose
+cat > docker-compose.yml <<'YAML'
+services:
+  net-nav:
+    image: ghcr.io/zhaozengxiao/net-nav:latest
+    container_name: net-nav
+    ports:
+      - "8080:6666"
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+YAML
+docker compose up -d
+```
+- 更新镜像：`docker pull ghcr.io/zhaozengxiao/net-nav:latest && docker restart net-nav`
+- 数据在挂载卷 `./data`，升级不丢
+
 ## Docker 部署（单端口 6666，含前端构建产物）
 ```bash
 # 构建并启动
