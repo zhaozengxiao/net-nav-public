@@ -93,9 +93,101 @@ POST /api/admin/scan                 # 需认证
 响应：`{ "found": [{ "ip", "port", "title", "url" }], "elapsed": 1234 }`
 > `mode`: `fast`(常用端口) / `full`(全端口，慢)。扫描结果需前端手动导入，AI 可直接用返回的 `url`+`title` 调 3.3 新增。
 
+### 3.8 导出服务（JSON，含分组结构）
+```bash
+GET /api/admin/services/export       # 需认证
+```
+响应：`net-nav-services.json`（`{ type: "net-nav-services", groups: [{ name, icon, sort, collapsed, services: [...] }], ungrouped: [...] }`），可在界面或脚本中持久化/迁移。
+
+### 3.9 导入服务（JSON，去重合并）
+```bash
+POST /api/admin/services/import      # 需认证
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{ "type": "net-nav-services", "groups": [{ "name": "Home", "services": [{ "name": "GitLab", "url": "http://..." }] }] }
+```
+响应：`{ "ok": true, "addedGroups": 1, "addedServices": 6, "skippedServices": 0 }`
+> 分组按名称复用/新建；服务按 `name+url` 去重；导入后自动异步探测新服务状态。
+
 ---
 
-## 4. 典型工作流（AI 用）
+## 4. 书签管理接口（公开，无需认证）
+
+书签数据模型：`{ id, name, url, sort, path }`
+- `path`: 文件夹路径数组，如 `["工作","运维"]`；根目录为 `[]`
+- `url` 为空的行 = 文件夹占位行（表示空文件夹，导入/导出时保留）
+
+### 4.1 查询书签列表
+```bash
+GET /api/bookmarks
+```
+响应：书签数组，按 `sort` 排序（树先序）。AI 先查这个了解现有结构再操作。
+
+### 4.2 新增文件夹
+```bash
+POST /api/bookmarks/new-folder
+{ "parent": ["工作"], "name": "运维" }
+```
+响应：`{ "id": 21 }`（文件夹 = 占位行，`url` 为空）
+
+### 4.3 重命名文件夹（含子树路径迁移）
+```bash
+POST /api/bookmarks/rename-folder
+{ "oldPath": ["工作","运维"], "newName": "监控" }
+```
+响应：`{ "ok": true, "changed": 5 }`（所有以 oldPath 为前缀的书签路径一并迁移）
+
+### 4.4 删除文件夹（含子内容）
+```bash
+POST /api/bookmarks/delete-folder
+{ "path": ["工作","运维"] }
+```
+响应：`{ "ok": true, "removed": 5 }`（该文件夹及全部子书签被删除）
+
+### 4.5 编辑/删除书签
+```bash
+PUT    /api/bookmarks/:id          # 编辑：{ "name"?, "url"? }
+DELETE /api/bookmarks/:id          # 删除
+```
+> 新增单个书签暂未开放独立接口：批量新增用 4.8 导入（HTML 可直接构造）；移动书签用 4.6。
+
+### 4.6 拖拽排序 + 跨文件夹移动
+```bash
+POST /api/bookmarks/reorder
+{ "ids": [3, 1, 2], "paths": { "3": ["工作"] } }
+```
+响应：`{ "ok": true, "changed": 3 }`
+> `ids` 按树先序重设 sort；`paths` 可选，`{ 书签id: 新路径 }` 用于跨文件夹迁移（与 ids 同请求一次持久化）。
+
+### 4.7 连通性检测（流式）
+```bash
+POST /api/bookmarks/check-stream
+{ "urls": ["http://192.168.50.10", "https://example.com"] }
+```
+响应：`application/x-ndjson` 流式输出，每完成一条立即推送一行，无需等全部：
+```
+{"url":"http://192.168.50.10","online":true,"ms":12,"code":200}
+{"url":"https://example.com","online":false,"ms":-1,"code":null}
+```
+> 并发 12；探测不校验 TLS 证书（自签名 https 视为在线）；支持跟随重定向。
+
+### 4.8 导入书签（浏览器 HTML）
+```bash
+POST /api/bookmarks/import
+{ "html": "<!DOCTYPE NETSCAPE-Bookmark-file-1>..." }
+```
+响应：`{ "added": 10, "skipped": 3, "total": 13 }`（按 `url+path` 去重；空文件夹会重建占位行）
+
+### 4.9 导出书签（浏览器 HTML）
+```bash
+GET /api/bookmarks/export
+```
+响应：`bookmarks.html`（Netscape 格式，保留树结构与排序，Chrome/Edge/火狐可直接导入；空文件夹保留）
+
+---
+
+## 5. 典型工作流（AI 用）
 
 ```bash
 HOST=http://192.168.50.203:6666
@@ -122,7 +214,7 @@ curl -s -X DELETE $HOST/api/admin/services/21 -H "Authorization: Bearer $TOKEN"
 
 ---
 
-## 5. 错误格式
+## 6. 错误格式
 
 | 状态码 | 含义 |
 |--------|------|
@@ -134,6 +226,6 @@ curl -s -X DELETE $HOST/api/admin/services/21 -H "Authorization: Bearer $TOKEN"
 
 ---
 
-## 6. 实时状态（可选）
+## 7. 实时状态（可选）
 
 `GET /api/events` 为 SSE 长连接，推送服务状态变化；普通 AI 管理服务无需订阅。

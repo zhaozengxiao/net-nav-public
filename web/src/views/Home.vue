@@ -144,7 +144,7 @@ watch(favOpen, (v) => {
   closeAll(bmTree.value);
   checkBookmarks();
 });
-const bookmarks = ref<{ id: number; name: string; url: string; path: string[] }[]>([]);
+const bookmarks = ref<{ id: number; name: string; url: string; path: string[]; sort: number }[]>([]);
 const bmStatus = ref<Record<string, { online: boolean; ms: number }>>({});
 const importInput = ref<HTMLInputElement>();
 
@@ -210,7 +210,7 @@ const bmTree = computed<BmNode[]>(() => {
   const root: BmNode[] = [];
   const map = new Map<string, BmNode>();
   const key = (p: string[]) => p.join("\u0000");
-  for (const b of [...bookmarks.value].sort((a, c) => a.path.length - c.path.length)) {
+  for (const b of [...bookmarks.value].sort((a, c) => a.path.length - c.path.length || a.sort - c.sort)) {
     let cur = root;
     const acc: string[] = [];
     for (const seg of b.path) {

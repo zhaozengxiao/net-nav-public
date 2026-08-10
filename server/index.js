@@ -411,6 +411,99 @@ app.delete("/api/admin/groups/:id", adminAuth, (req, res) => {
 });
 
 // ---------- 管理：服务 CRUD ----------
+// 服务导入导出（JSON，含分组结构）
+app.get("/api/admin/services/export", adminAuth, (req, res) => {
+  const groups = db.prepare("SELECT * FROM groups ORDER BY sort, id").all();
+  const services = db.prepare("SELECT * FROM services ORDER BY sort, id").all();
+  const pick = (s) => ({
+    name: s.name,
+    url: s.url,
+    description: s.description,
+    icon: s.icon,
+    color: s.color,
+    sort: s.sort,
+    docker_container: s.docker_container,
+    docker_image: s.docker_image,
+    favorite: s.favorite,
+  });
+  const gids = new Set(groups.map((g) => g.id));
+  res.setHeader("Content-Disposition", 'attachment; filename="net-nav-services.json"');
+  res.json({
+    type: "net-nav-services",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    groups: groups.map((g) => ({
+      name: g.name,
+      icon: g.icon,
+      sort: g.sort,
+      collapsed: g.collapsed,
+      services: services.filter((s) => s.group_id === g.id).map(pick),
+    })),
+    ungrouped: services.filter((s) => !gids.has(s.group_id)).map(pick),
+  });
+});
+
+app.post("/api/admin/services/import", adminAuth, (req, res) => {
+  const data = req.body;
+  if (!data || data.type !== "net-nav-services" || !Array.isArray(data.groups)) {
+    return res.status(400).json({ error: "文件格式不正确（请使用本系统导出的 JSON）" });
+  }
+  const insG = db.prepare("INSERT INTO groups (name, icon, sort, collapsed) VALUES (?, ?, ?, ?)");
+  const insS = db.prepare(
+    "INSERT INTO services (group_id, name, url, description, icon, color, sort, docker_container, docker_image, favorite) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  );
+  const existingG = new Map(db.prepare("SELECT name, id FROM groups").all().map((r) => [r.name, r.id]));
+  const existingS = new Set(db.prepare("SELECT name, url FROM services").all().map((r) => `${r.name}|${r.url}`));
+  let addedGroups = 0,
+    addedServices = 0,
+    skippedServices = 0;
+  const newIds = [];
+  const tx = db.transaction(() => {
+    const addSvc = (gid, s) => {
+      if (!s || !s.name || !s.url) return;
+      const key = `${s.name}|${s.url}`;
+      if (existingS.has(key)) {
+        skippedServices++;
+        return;
+      }
+      const info = insS.run(
+        gid,
+        s.name,
+        s.url,
+        s.description || "",
+        s.icon || "🔗",
+        s.color || "#38bdf8",
+        s.sort || 0,
+        s.docker_container || "",
+        s.docker_image || "",
+        s.favorite ? 1 : 0
+      );
+      existingS.add(key);
+      addedServices++;
+      newIds.push(info.lastInsertRowid);
+    };
+    for (const g of data.groups || []) {
+      let gid = existingG.get(g.name);
+      if (!gid) {
+        const info = insG.run(g.name || "未命名", g.icon || "📁", g.sort || 0, g.collapsed ? 1 : 0);
+        gid = info.lastInsertRowid;
+        existingG.set(g.name, gid);
+        addedGroups++;
+      }
+      for (const s of g.services || []) addSvc(gid, s);
+    }
+    const gid = defaultGroupId();
+    for (const s of data.ungrouped || []) addSvc(gid, s);
+  });
+  tx();
+  // 导入后异步探测新服务状态（不阻塞响应）
+  for (const id of newIds) {
+    const row = db.prepare("SELECT url FROM services WHERE id = ?").get(id);
+    if (row) monitor.probe(row.url).then((r) => monitor.cache.set(id, r));
+  }
+  res.json({ ok: true, addedGroups, addedServices, skippedServices });
+});
+
 app.post("/api/admin/services", adminAuth, (req, res) => {
   const { name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
   if (!name || !url) return res.status(400).json({ error: "名称和地址必填" });

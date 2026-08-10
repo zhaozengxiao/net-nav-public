@@ -17,6 +17,9 @@
           <el-button plain @click="openDockerCfg()">🐳 Docker 设置</el-button>
           <el-button plain @click="openMonCfg()">⏱️ 检测设置</el-button>
           <el-button plain :loading="dockerChecking" @click="refreshDocker">🔄 刷新 Docker 检测</el-button>
+          <el-button plain @click="exportServices">📤 导出</el-button>
+          <el-button plain @click="svcImportInput?.click()">📥 导入</el-button>
+          <input ref="svcImportInput" type="file" accept=".json,application/json" style="display: none" @change="onImportSvcFile" />
         </div>
 
         <!-- 桌面端：表格（主题化） -->
@@ -533,6 +536,38 @@ async function loadAll() {
 
 // ---- 书签管理 ----
 const bmFileInput = ref<HTMLInputElement>();
+const svcImportInput = ref<HTMLInputElement>();
+
+async function exportServices() {
+  try {
+    const blob: any = await api.get("/admin/services/export", { responseType: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "net-nav-services.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success("已导出服务 JSON");
+  } catch (e) {
+    handleErr(e);
+  }
+}
+
+async function onImportSvcFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const text = await file.text();
+  try {
+    const data = JSON.parse(text);
+    const r: any = await api.post("/admin/services/import", data);
+    ElMessage.success(`导入完成：新增分组 ${r.addedGroups} 个、服务 ${r.addedServices} 个，跳过重复 ${r.skippedServices} 个`);
+    await loadServices();
+  } catch (e) {
+    handleErr(e);
+  }
+}
 
 async function exportBmHtml() {
   try {
@@ -659,7 +694,17 @@ function allFolderPaths() {
       }
     }
   });
-  return arr.sort((a, b) => a.length - b.length || a.join("/").localeCompare(b.join("/")));
+  // 与首页一致：同深度按 sort 排序（folder 的 sort = 占位行 sort 或第一个包含它的书签 sort）
+  return arr.sort((a, b) => folderSortOf(a) - folderSortOf(b) || a.join("/").localeCompare(b.join("/")));
+}
+
+// 文件夹的 sort：占位行（url=''）优先，否则取 path 完全匹配的第一个书签
+function folderSortOf(p: string[]) {
+  const key = JSON.stringify(p);
+  const ph = bookmarks.value.find((b: any) => JSON.stringify(b.path || []) === key && !b.url);
+  if (ph) return ph.sort;
+  const first = bookmarks.value.find((b: any) => JSON.stringify(b.path || []) === key);
+  return first?.sort ?? 0;
 }
 
 const realBookmarks = computed(() => bookmarks.value.filter((b: any) => b.url));
@@ -675,26 +720,38 @@ const treeRows = computed<BmRow[]>(() => {
       return bp.length >= p.length && p.every((seg, i) => bp[i] === seg);
     }).length;
 
+  // 直属书签 + 子文件夹按 sort 混合排序（与首页 bmTree 同深度排序一致）
+  const kidsOf = (p: string[]) =>
+    [
+      ...realBookmarks.value
+        .filter((b: any) => keyOf(b.path || []) === keyOf(p))
+        .map((b: any) => ({ kind: "b" as const, b, sort: b.sort })),
+      ...folders
+        .filter((cp) => cp.length === p.length + 1 && p.every((seg, i) => cp[i] === seg))
+        .map((cp) => ({ kind: "f" as const, cp, sort: folderSortOf(cp) })),
+    ].sort((x, y) => x.sort - y.sort);
+
   const pushFolder = (p: string[], depth: number) => {
     const open = folderOpen.get(keyOf(p)) ?? false;
     rows.push({ type: "folder", path: p, name: p[p.length - 1], depth, open, count: countTree(p) });
     if (!open) return;
-    // 直属书签（过滤占位行）
-    realBookmarks.value
-      .filter((b: any) => keyOf(b.path || []) === keyOf(p))
-      .forEach((b: any) => rows.push({ type: "bookmark", path: p, name: b.name, url: b.url, id: b.id, depth: depth + 1, open: false, count: 0 }));
-    // 子文件夹
-    folders
-      .filter((cp) => cp.length === p.length + 1 && p.every((seg, i) => cp[i] === seg))
-      .forEach((cp) => pushFolder(cp, depth + 1));
+    for (const k of kidsOf(p)) {
+      if (k.kind === "b") rows.push({ type: "bookmark", path: p, name: k.b.name, url: k.b.url, id: k.b.id, depth: depth + 1, open: false, count: 0 });
+      else pushFolder(k.cp, depth + 1);
+    }
   };
 
-  // 根目录直属书签（过滤占位行）
-  realBookmarks.value
-    .filter((b: any) => (b.path || []).length === 0)
-    .forEach((b: any) => rows.push({ type: "bookmark", path: [], name: b.name, url: b.url, id: b.id, depth: 0, open: false, count: 0 }));
-  // 顶层文件夹
-  folders.filter((p) => p.length === 1).forEach((p) => pushFolder(p, 0));
+  // 根目录直属书签 + 顶层文件夹按 sort 混合排序（与首页一致）
+  const rootKids = [
+    ...realBookmarks.value
+      .filter((b: any) => (b.path || []).length === 0)
+      .map((b: any) => ({ kind: "b" as const, b, sort: b.sort })),
+    ...folders.filter((p) => p.length === 1).map((p) => ({ kind: "f" as const, p, sort: folderSortOf(p) })),
+  ].sort((x, y) => x.sort - y.sort);
+  for (const k of rootKids) {
+    if (k.kind === "b") rows.push({ type: "bookmark", path: [], name: k.b.name, url: k.b.url, id: k.b.id, depth: 0, open: false, count: 0 });
+    else pushFolder(k.p, 0);
+  }
   return rows;
 });
 
