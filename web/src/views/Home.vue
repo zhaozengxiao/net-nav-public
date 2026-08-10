@@ -827,11 +827,11 @@ function onClickOutside(e: MouseEvent) {
   opacity: 1;
 }
 
-/* 内容区 */
+/* 内容区（宽度自适应屏幕，不再固定 1200px；卡片列数随视口 auto-fill） */
 .content {
   position: relative;
   z-index: 1;
-  max-width: 1200px;
+  width: 100%;
   margin: 0 auto;
   padding: 10px 24px 60px;
 }
