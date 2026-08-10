@@ -9,12 +9,29 @@
     </div>
 
     <el-tabs v-model="tab">
+      <!-- ===== 分组管理（一级，排在服务管理前） ===== -->
+      <el-tab-pane label="分组管理" name="groups">
+        <div class="group-new">
+          <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="flex: 1" />
+          <el-button type="primary" @click="saveGroup">➕ 新建分组</el-button>
+        </div>
+        <div class="group-list">
+          <div v-for="g in groups" :key="g.id" class="group-row">
+            <span class="group-ico">{{ g.icon }}</span>
+            <span class="group-name">{{ g.name }}</span>
+            <span class="group-cnt">{{ svcCountOf(g.id) }} 个服务</span>
+            <el-button size="small" @click="renameGroup(g)">重命名</el-button>
+            <el-button size="small" type="danger" plain @click="deleteGroup(g)">删除</el-button>
+          </div>
+          <div v-if="!groups.length" class="m-empty">暂无分组，先新建一个</div>
+        </div>
+      </el-tab-pane>
+
       <!-- ===== 服务管理 ===== -->
       <el-tab-pane label="服务管理" name="services">
         <div class="toolbar">
           <el-button type="primary" @click="openService()">➕ 新增服务</el-button>
           <el-button type="success" plain @click="openScan()">🔍 自动发现</el-button>
-          <el-button plain @click="openGroupMgr()">🗂️ 分组管理</el-button>
           <el-button plain @click="openDockerCfg()">🐳 Docker 设置</el-button>
           <el-button plain @click="openMonCfg()">⏱️ 检测设置</el-button>
           <el-button plain :loading="dockerChecking" @click="refreshDocker">🔄 刷新 Docker 检测</el-button>
@@ -300,24 +317,6 @@
         <el-button type="primary" @click="saveService">保存</el-button>
       </template>
     </el-dialog>
-
-    <!-- 分组管理 -->
-    <el-dialog v-model="groupDlg" title="🗂️ 分组管理" :width="'min(420px, 94vw)'">
-      <div class="group-new">
-        <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="flex: 1" />
-        <el-button type="primary" @click="saveGroup">➕ 新建分组</el-button>
-      </div>
-      <div class="group-list">
-        <div v-for="g in groups" :key="g.id" class="group-row">
-          <span class="group-ico">{{ g.icon }}</span>
-          <span class="group-name">{{ g.name }}</span>
-          <span class="group-cnt">{{ svcCountOf(g.id) }} 个服务</span>
-          <el-button size="small" @click="renameGroup(g)">重命名</el-button>
-          <el-button size="small" type="danger" plain @click="deleteGroup(g)">删除</el-button>
-        </div>
-        <div v-if="!groups.length" class="m-empty">暂无分组，先新建一个</div>
-      </div>
-    </el-dialog>
   </div>
 </template>
 
@@ -341,8 +340,7 @@ const svcDlg = ref(false);
 const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: 0 });
 const groups = ref<any[]>([]);
 
-// ---- 分组管理 ----
-const groupDlg = ref(false);
+// ---- 分组管理（一级 tab） ----
 const newGroupName = ref("");
 
 async function loadGroups() {
@@ -351,11 +349,9 @@ async function loadGroups() {
 function svcCountOf(gid: number) {
   return services.value.filter((s: any) => s.group_id === gid).length;
 }
-function openGroupMgr() {
-  newGroupName.value = "";
-  loadGroups();
-  groupDlg.value = true;
-}
+watch(tab, (v) => {
+  if (v === "groups") loadGroups();
+});
 async function saveGroup() {
   const name = newGroupName.value.trim();
   if (!name) return ElMessage.warning("分组名称不能为空");
