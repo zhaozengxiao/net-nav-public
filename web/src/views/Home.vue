@@ -24,12 +24,26 @@
         <input ref="importInput" type="file" accept=".html" hidden @change="importBookmarks" />
       </div>
       <div class="fav-list">
-        <BmTree :nodes="bmTree" :status="bmStatus" @open="openUrl" @remove="removeBookmark" @expand="checkBookmarks" />
+        <BmTree :nodes="bmTree" :status="bmStatus" @open="openUrl" @remove="removeBookmark" @expand="checkBookmarks" @ctx="showCtx" />
         <div v-if="!bookmarks.length" class="fav-empty">
           暂无书签<br />点 📥 导入浏览器书签<br />（浏览器导出为 HTML）
         </div>
       </div>
     </aside>
+
+    <!-- 书签/文件夹/服务 右键快速编辑菜单 -->
+    <div v-if="ctxMenu" class="fav-ctx" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }" @click.stop @contextmenu.prevent.stop>
+      <template v-if="ctxMenu.target.type === 'folder'">
+        <button class="ctx-item" @click="ctxRename">✏️ 重命名文件夹</button>
+        <button class="ctx-item danger" @click="ctxDelete">🗑️ 删除文件夹</button>
+      </template>
+      <template v-else>
+        <button class="ctx-item" @click="ctxOpen">🔗 打开</button>
+        <button class="ctx-item" @click="ctxRename">✏️ 重命名</button>
+        <button class="ctx-item" @click="ctxEditUrl">🌐 修改网址</button>
+        <button class="ctx-item danger" @click="ctxDelete">🗑️ 删除</button>
+      </template>
+    </div>
 
     <!-- 时钟区 -->
     <section class="hero">
@@ -59,6 +73,7 @@
           target="_blank"
           rel="noopener"
           @click="track(s)"
+          @contextmenu="showSvcCtx($event, s)"
         >
           <span class="status-dot" :class="statusClass(s)" :title="statusText(s)"></span>
           <span
@@ -96,7 +111,7 @@
 
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, PropType } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import api from "../api";
 
 interface Service {
@@ -185,6 +200,7 @@ interface BmNode {
   name: string;
   url?: string;
   id?: number;
+  path?: string[];
   children?: BmNode[];
   open?: boolean;
 }
@@ -202,7 +218,7 @@ const bmTree = computed<BmNode[]>(() => {
       const k = key(acc);
       let node = map.get(k);
       if (!node) {
-        node = { type: "folder", name: seg, children: [], open: false };
+        node = { type: "folder", name: seg, path: [...acc], children: [], open: false };
         map.set(k, node);
         cur.push(node);
       }
@@ -220,7 +236,7 @@ const BmTree = defineComponent({
     nodes: { type: Array as PropType<BmNode[]>, required: true },
     status: { type: Object as PropType<Record<string, { online: boolean; ms: number }>>, default: () => ({}) },
   },
-  emits: ["open", "remove", "expand"],
+  emits: ["open", "remove", "expand", "ctx"],
   setup(props, { emit }) {
     return () =>
       h("div", { class: "bm-tree" }, (props.nodes || []).map((n) => {
@@ -235,6 +251,7 @@ const BmTree = defineComponent({
                   if (urls.length) emit("expand", urls);
                 }
               },
+              onContextmenu: (e: MouseEvent) => emit("ctx", e, n),
             }, [
               h("span", { class: "bm-caret" }, n.open ? "▾" : "▸"),
               h("span", { class: "bm-folder-name" }, `📁 ${n.name}`),
@@ -246,6 +263,7 @@ const BmTree = defineComponent({
                   onOpen: (u: string) => emit("open", u),
                   onRemove: (i: number) => emit("remove", i),
                   onExpand: (urls: string[]) => emit("expand", urls),
+                  onCtx: (e: MouseEvent, bm: BmNode) => emit("ctx", e, bm),
                 })
               : null,
           ]);
@@ -258,7 +276,7 @@ const BmTree = defineComponent({
           else if (st.ms > 500) { dot = "slow"; dotTitle = `延迟高 ${st.ms}ms`; }
           else { dot = "online"; dotTitle = `在线 ${st.ms}ms`; }
         }
-        return h("div", { class: "fav-item", title: `${n.url}（${dotTitle}）`, onClick: () => emit("open", n.url) }, [
+        return h("div", { class: "fav-item", title: `${n.url}（${dotTitle}）`, onClick: () => emit("open", n.url), onContextmenu: (e: MouseEvent) => emit("ctx", e, n) }, [
           h("span", { class: `fav-dot ${dot}`, title: dotTitle }),
           h("span", { class: "fav-name" }, n.name),
         ]);
@@ -295,6 +313,149 @@ async function loadBookmarks() {
 async function removeBookmark(b: { id: number }) {
   await api.delete(`/bookmarks/${b.id}`);
   bookmarks.value = bookmarks.value.filter((x) => x.id !== b.id);
+}
+
+// ---- 右键快速编辑（书签/文件夹/服务卡片） ----
+const ctxMenu = ref<{ x: number; y: number; target: any } | null>(null);
+
+function showCtx(e: MouseEvent, target: any) {
+  e.preventDefault();
+  e.stopPropagation();
+  ctxMenu.value = {
+    x: Math.min(e.clientX, window.innerWidth - 150),
+    y: Math.min(e.clientY, window.innerHeight - 180),
+    target,
+  };
+}
+function showSvcCtx(e: MouseEvent, s: Service) {
+  showCtx(e, { type: "service", id: s.id, name: s.name, url: s.url, svc: s });
+}
+function closeCtx() {
+  ctxMenu.value = null;
+}
+// 右键非目标区域（空白/其它元素）时关闭菜单；可右键目标自行 stopPropagation 处理
+function onDocCtx(e: MouseEvent) {
+  const t = e.target as HTMLElement | null;
+  if (!t || t.closest(".fav-ctx")) return;
+  closeCtx();
+}
+function ctxOpen() {
+  const t = ctxMenu.value?.target;
+  closeCtx();
+  if (t?.url) window.open(t.url, "_blank");
+}
+async function ctxRename() {
+  const t = ctxMenu.value?.target;
+  closeCtx(); // 先关右键菜单，再弹输入框
+  if (!t) return;
+  if (t.type === "folder") {
+    // 文件夹重命名（含子树路径迁移）
+    try {
+      const { value } = await ElMessageBox.prompt("新的文件夹名", "重命名文件夹", {
+        inputValue: t.name,
+        confirmButtonText: "保存",
+        cancelButtonText: "取消",
+        inputValidator: (v: string) => (v.trim() ? true : "名称不能为空"),
+      });
+      await api.post("/bookmarks/rename-folder", { oldPath: t.path, newName: value.trim() });
+      ElMessage.success("文件夹已重命名");
+      await loadBookmarks();
+    } catch {
+      /* 取消 */
+    }
+    return;
+  }
+  try {
+    const { value } = await ElMessageBox.prompt("新的名称", t.type === "service" ? "重命名服务" : "重命名", {
+      inputValue: t.name,
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+      inputValidator: (v: string) => (v.trim() ? true : "名称不能为空"),
+    });
+    if (t.type === "service") {
+      await api.put(`/admin/services/${t.id}`, { name: value.trim() });
+      t.svc.name = value.trim();
+    } else {
+      await api.put(`/bookmarks/${t.id}`, { name: value.trim(), url: t.url });
+      const src = bookmarks.value.find((x) => x.id === t.id);
+      if (src) src.name = value.trim();
+    }
+    ElMessage.success("已重命名");
+  } catch {
+    /* 取消 */
+  }
+}
+async function ctxEditUrl() {
+  const t = ctxMenu.value?.target;
+  closeCtx(); // 先关右键菜单，再弹输入框
+  if (!t || t.type === "folder") return;
+  try {
+    const { value } = await ElMessageBox.prompt("新的网址（含 http(s)://）", "修改网址", {
+      inputValue: t.url,
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+      inputValidator: (v: string) => (/^https?:\/\//i.test(v.trim()) ? true : "网址需以 http(s):// 开头"),
+    });
+    if (t.type === "service") {
+      await api.put(`/admin/services/${t.id}`, { url: value.trim() });
+      t.svc.url = value.trim();
+    } else {
+      await api.put(`/bookmarks/${t.id}`, { name: t.name, url: value.trim() });
+      const src = bookmarks.value.find((x) => x.id === t.id);
+      if (src) src.url = value.trim();
+    }
+    ElMessage.success("已修改网址");
+  } catch {
+    /* 取消 */
+  }
+}
+async function ctxDelete() {
+  const t = ctxMenu.value?.target;
+  closeCtx(); // 先关右键菜单，再弹确认框
+  if (!t) return;
+  if (t.type === "folder") {
+    // 文件夹删除（含子内容）
+    try {
+      const count = t.children?.filter((c) => c.type === "bookmark").length || 0;
+      await ElMessageBox.confirm(
+        `删除文件夹「${t.name}」？${count ? `（内含 ${count} 个书签，将一并删除）` : ""}`,
+        "删除文件夹",
+        { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }
+      );
+    } catch {
+      closeCtx();
+      return;
+    }
+    try {
+      const r: any = await api.post("/bookmarks/delete-folder", { path: t.path });
+      ElMessage.success(`已删除文件夹（移除 ${r.removed} 条）`);
+      await loadBookmarks();
+    } catch {
+      /* 失败 */
+    }
+    closeCtx();
+    return;
+  }
+  const confirmText = t.type === "service" ? `删除服务「${t.name}」？` : `删除书签「${t.name}」？`;
+  try {
+    await ElMessageBox.confirm(confirmText, "删除", {
+      type: "warning",
+      confirmButtonText: "删除",
+      cancelButtonText: "取消",
+    });
+  } catch {
+    closeCtx();
+    return;
+  }
+  if (t.type === "service") {
+    await api.delete(`/admin/services/${t.id}`);
+    services.value = services.value.filter((x) => x.id !== t.id);
+    ElMessage.success("已删除服务");
+  } else {
+    await removeBookmark({ id: t.id });
+    ElMessage.success("已删除");
+  }
+  closeCtx();
 }
 
 // 点击搜索框任意位置（含图标/留白）都聚焦输入框
@@ -464,19 +625,22 @@ onMounted(() => {
   loadBookmarks();
   connectSSE(); // 状态实时推送，无需轮询
   document.addEventListener("click", onClickOutside);
+  document.addEventListener("contextmenu", onDocCtx);
 });
 
 onBeforeUnmount(() => {
   clearInterval(timer);
   sse?.close();
   document.removeEventListener("click", onClickOutside);
+  document.removeEventListener("contextmenu", onDocCtx);
 });
 
 // 点击书签面板外部任意位置 → 关闭面板
 function onClickOutside(e: MouseEvent) {
   const t = e.target as HTMLElement | null;
+  if (t) closeCtx(); // 点击任意处先关右键菜单
   if (!t || !favOpen.value) return;
-  if (t.closest(".fav-panel") || t.closest(".menu-btn")) return; // 面板内部 / ☰ 按钮不关
+  if (t.closest(".fav-panel") || t.closest(".menu-btn") || t.closest(".fav-ctx") || t.closest(".el-overlay") || t.closest(".el-message")) return; // 面板/☰/右键菜单/Element 弹层不关
   favOpen.value = false;
 }
 </script>
@@ -746,6 +910,45 @@ function onClickOutside(e: MouseEvent) {
   border: 1px dashed rgba(148, 163, 184, 0.35);
   border-radius: 12px;
   margin: 10px;
+}
+
+/* 书签右键快速编辑菜单 */
+.fav-ctx {
+  position: fixed;
+  z-index: 3000;
+  min-width: 138px;
+  padding: 6px;
+  background: rgba(15, 20, 35, 0.94);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fav-ctx .ctx-item {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #d7e1f0;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.fav-ctx .ctx-item:hover {
+  background: rgba(56, 132, 255, 0.2);
+  color: #fff;
+}
+.fav-ctx .ctx-item.danger {
+  color: #f56c6c;
+}
+.fav-ctx .ctx-item.danger:hover {
+  background: rgba(245, 108, 108, 0.18);
+  color: #ff8a8a;
 }
 
 /* 卡片 */

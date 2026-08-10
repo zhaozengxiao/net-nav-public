@@ -60,6 +60,8 @@ body {
   min-height: 100dvh;
   transition: background 0.4s ease;
   overflow-x: hidden;
+  /* 为滚动条预留空间：弹窗锁定滚动导致滚动条消失时布局不位移 */
+  scrollbar-gutter: stable;
 }
 
 /* ===== 粒子背景（tsParticles 现成库） ===== */
