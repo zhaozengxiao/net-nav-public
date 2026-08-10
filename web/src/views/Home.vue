@@ -78,6 +78,7 @@
               v-for="s in g.list"
               :key="s.id"
               class="card"
+              :data-id="s.id"
               :style="{ '--c': s.color }"
               :href="s.url"
               target="_blank"
@@ -113,11 +114,12 @@
       </template>
 
       <!-- 扁平模式：全部平铺 -->
-      <div v-else class="cards">
+      <div v-else ref="cardsWrap" class="cards">
         <a
           v-for="s in filteredServices"
           :key="s.id"
           class="card"
+          :data-id="s.id"
           :style="{ '--c': s.color }"
           :href="s.url"
           target="_blank"
@@ -160,9 +162,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, PropType } from "vue";
+import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick, PropType } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Solar } from "lunar-javascript";
+import Sortable from "sortablejs";
 import api from "../api";
 
 interface Service {
@@ -580,10 +583,15 @@ const particleOptions = {
 const filteredServices = computed(() => {
   const kw = keyword.value.trim().toLowerCase();
   if (!kw) return services.value;
+  // 支持搜索：名称/描述/网址/分组名/在线状态/镜像更新状态
   return services.value.filter(
     (s) =>
       s.name.toLowerCase().includes(kw) ||
-      (s.description || "").toLowerCase().includes(kw)
+      (s.description || "").toLowerCase().includes(kw) ||
+      s.url.toLowerCase().includes(kw) ||
+      (s.groupName || "").toLowerCase().includes(kw) ||
+      statusText(s).toLowerCase().includes(kw) ||
+      dockerText(s).toLowerCase().includes(kw)
   );
 });
 
@@ -607,6 +615,47 @@ function toggleGroup(id: number) {
   else next.add(id);
   groupCollapsed.value = next;
 }
+
+// ---- 服务卡片拖拽排序（首页直接调整顺序，写回 sort） ----
+const cardsWrap = ref<HTMLElement>();
+let cardSortables: Sortable[] = [];
+
+function initCardSortable() {
+  cardSortables.forEach((s) => s.destroy());
+  cardSortables = [];
+  const containers: HTMLElement[] = [];
+  if (groupMode.value) {
+    containers.push(...(Array.from(document.querySelectorAll(".group-sec .cards")) as HTMLElement[]));
+  } else if (cardsWrap.value) {
+    containers.push(cardsWrap.value);
+  }
+  for (const el of containers) {
+    cardSortables.push(
+      Sortable.create(el, {
+        animation: 150,
+        ghostClass: "sortable-ghost",
+        disabled: !!keyword.value.trim(), // 搜索过滤时不拖拽
+        onEnd: async () => {
+          const ids = Array.from(document.querySelectorAll(".cards .card"))
+            .map((c) => Number((c as HTMLElement).dataset.id))
+            .filter((n) => Number.isInteger(n));
+          if (ids.length < 2) return;
+          try {
+            await api.put("/admin/services/reorder", { ids });
+            ElMessage.success("排序已保存");
+          } catch {
+            ElMessage.error("保存排序失败（请先在后台登录）");
+          }
+        },
+      })
+    );
+  }
+}
+
+watch([keyword, groupMode, groupCollapsed], async () => {
+  await nextTick();
+  initCardSortable();
+});
 
 const totalServices = computed(() => services.value.length);
 const onlineCount = computed(() => services.value.filter((s) => s.status?.online).length);
@@ -740,6 +789,12 @@ onMounted(() => {
   connectSSE(); // 状态实时推送，无需轮询
   document.addEventListener("click", onClickOutside);
   document.addEventListener("contextmenu", onDocCtx);
+  // 服务加载完成后初始化卡片拖拽
+  const stopWatch = watch(services, async () => {
+    await nextTick();
+    initCardSortable();
+    stopWatch();
+  });
 });
 
 onBeforeUnmount(() => {
@@ -832,7 +887,23 @@ function onClickOutside(e: MouseEvent) {
 .group-sec {
   margin-bottom: 22px;
 }
-.group-title {
+
+/* 卡片拖拽 */
+.sortable-ghost {
+  opacity: 0.45;
+  outline: 2px dashed rgba(100, 160, 255, 0.7);
+  outline-offset: 2px;
+  background: rgba(56, 132, 255, 0.08);
+}
+.cards {
+  cursor: default;
+}
+.cards .card {
+  cursor: grab;
+}
+.cards .card:active {
+  cursor: grabbing;
+}.group-title {
   display: flex;
   align-items: center;
   gap: 8px;
