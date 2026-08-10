@@ -14,6 +14,7 @@
         <div class="toolbar">
           <el-button type="primary" @click="openService()">➕ 新增服务</el-button>
           <el-button type="success" plain @click="openScan()">🔍 自动发现</el-button>
+          <el-button plain @click="openGroupMgr()">🗂️ 分组管理</el-button>
           <el-button plain @click="openDockerCfg()">🐳 Docker 设置</el-button>
           <el-button plain @click="openMonCfg()">⏱️ 检测设置</el-button>
           <el-button plain :loading="dockerChecking" @click="refreshDocker">🔄 刷新 Docker 检测</el-button>
@@ -44,6 +45,9 @@
             </el-table-column>
             <el-table-column label="名称" min-width="130">
               <template #default="{ row }"><span class="t-name">{{ row.name }}</span></template>
+            </el-table-column>
+            <el-table-column label="分组" width="110">
+              <template #default="{ row }"><span class="t-group">{{ row.groupName || "未分组" }}</span></template>
             </el-table-column>
             <el-table-column label="地址" min-width="190" show-overflow-tooltip>
               <template #default="{ row }"><span class="t-url">{{ row.url }}</span></template>
@@ -264,6 +268,11 @@
       <el-form label-width="70px" @submit.prevent>
         <el-form-item label="名称"><el-input v-model="svcForm.name" placeholder="如：GitLab" /></el-form-item>
         <el-form-item label="地址"><el-input v-model="svcForm.url" placeholder="http://192.168.1.10" /></el-form-item>
+        <el-form-item label="分组">
+          <el-select v-model="svcForm.group_id" placeholder="选择分组" style="width: 100%">
+            <el-option v-for="g in groups" :key="g.id" :label="g.icon + ' ' + g.name" :value="g.id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="描述"><el-input v-model="svcForm.description" placeholder="选填" /></el-form-item>
         <el-form-item label="图标"><el-input v-model="svcForm.icon" placeholder="🔗" maxlength="4" /></el-form-item>
         <el-form-item label="颜色">
@@ -291,6 +300,24 @@
         <el-button type="primary" @click="saveService">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- 分组管理 -->
+    <el-dialog v-model="groupDlg" title="🗂️ 分组管理" :width="'min(420px, 94vw)'">
+      <div class="group-new">
+        <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="flex: 1" />
+        <el-button type="primary" @click="saveGroup">➕ 新建分组</el-button>
+      </div>
+      <div class="group-list">
+        <div v-for="g in groups" :key="g.id" class="group-row">
+          <span class="group-ico">{{ g.icon }}</span>
+          <span class="group-name">{{ g.name }}</span>
+          <span class="group-cnt">{{ svcCountOf(g.id) }} 个服务</span>
+          <el-button size="small" @click="renameGroup(g)">重命名</el-button>
+          <el-button size="small" type="danger" plain @click="deleteGroup(g)">删除</el-button>
+        </div>
+        <div v-if="!groups.length" class="m-empty">暂无分组，先新建一个</div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -311,7 +338,72 @@ const isMobile = ref(false);
 const services = ref<any[]>([]);
 
 const svcDlg = ref(false);
-const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "" });
+const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: 0 });
+const groups = ref<any[]>([]);
+
+// ---- 分组管理 ----
+const groupDlg = ref(false);
+const newGroupName = ref("");
+
+async function loadGroups() {
+  groups.value = await api.get("/admin/groups");
+}
+function svcCountOf(gid: number) {
+  return services.value.filter((s: any) => s.group_id === gid).length;
+}
+function openGroupMgr() {
+  newGroupName.value = "";
+  loadGroups();
+  groupDlg.value = true;
+}
+async function saveGroup() {
+  const name = newGroupName.value.trim();
+  if (!name) return ElMessage.warning("分组名称不能为空");
+  try {
+    await api.post("/admin/groups", { name, icon: "📁" });
+    ElMessage.success(`已创建分组「${name}」`);
+    newGroupName.value = "";
+    await loadGroups();
+  } catch (e) {
+    handleErr(e);
+  }
+}
+async function renameGroup(g: any) {
+  try {
+    const { value } = await ElMessageBox.prompt("新的分组名称", "重命名分组", {
+      inputValue: g.name,
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+    });
+    if (!value.trim()) return;
+    await api.put(`/admin/groups/${g.id}`, { name: value.trim(), icon: g.icon });
+    ElMessage.success("已重命名");
+    await loadGroups();
+    loadServices();
+  } catch {
+    /* 取消 */
+  }
+}
+async function deleteGroup(g: any) {
+  const cnt = svcCountOf(g.id);
+  try {
+    await ElMessageBox.confirm(
+      `删除分组「${g.name}」？${cnt ? `（组内 ${cnt} 个服务将一并删除！）` : ""}`,
+      "删除分组",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }
+    );
+  } catch {
+    return;
+  }
+  try {
+    await api.delete(`/admin/groups/${g.id}`);
+    ElMessage.success("已删除");
+    await loadGroups();
+    loadServices();
+  } catch (e) {
+    handleErr(e);
+  }
+}
 
 // ---- Docker 设置 ----
 const dockerCfgDlg = ref(false);
@@ -528,6 +620,11 @@ function handleErr(e: any) {
 async function loadAll() {
   try {
     services.value = await api.get("/services");
+  } catch (e) {
+    handleErr(e);
+  }
+  try {
+    groups.value = await api.get("/admin/groups");
   } catch (e) {
     handleErr(e);
   }
@@ -1060,7 +1157,7 @@ function dockerText(s: any) {
 function openService(row?: any) {
   svcForm.value = row
     ? { ...row }
-    : { name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "" };
+    : { name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: groups.value[0]?.id || 0 };
   svcDlg.value = true;
 }
 async function saveService() {
@@ -1108,6 +1205,41 @@ async function removeService(row: any) {
 }
 .toolbar {
   margin-bottom: 14px;
+}
+
+/* 分组管理 */
+.group-new {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--el-border-color-lighter, rgba(148, 163, 184, 0.2));
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+.group-ico {
+  font-size: 16px;
+}
+.group-row .group-name {
+  flex: 1;
+  font-weight: 600;
+}
+.group-cnt {
+  font-size: 12px;
+  color: var(--el-text-color-secondary, #94a3b8);
+  margin-right: 6px;
+}
+.t-group {
+  font-size: 12px;
+  color: #7dd3fc;
+  background: rgba(56, 132, 255, 0.14);
+  padding: 2px 8px;
+  border-radius: 999px;
 }
 
 /* ===== 自动发现 ===== */

@@ -13,6 +13,7 @@
     "@tsparticles/vue3": "^4.3.2",
     "axios": "^1.7.0",
     "element-plus": "^2.8.0",
+    "lunar-javascript": "^1.7.7",
     "sortablejs": "^1.15.7",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0",

@@ -162,6 +162,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, PropType } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { Solar } from "lunar-javascript";
 import api from "../api";
 
 interface Service {
@@ -622,12 +623,29 @@ const greeting = computed(() => {
 
 function tick() {
   const now = new Date();
-  nowDate.value = now.toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "long",
-  });
+  const parts: string[] = [
+    now.toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      weekday: "long",
+    }),
+  ];
+  try {
+    // 农历 + 节气 + 节日（lunar-javascript）
+    const solar = Solar.fromDate(now);
+    const lunar = solar.getLunar();
+    parts.push(`农历${lunar.getMonthInChinese()}月${lunar.getDayInChinese()}`);
+    const fest: string[] = [];
+    const jq = lunar.getJieQi();
+    if (jq) fest.push(jq); // 当天是节气（如秋分）
+    fest.push(...(lunar.getFestivals() || [])); // 农历节日（除夕/春节/七夕…）
+    fest.push(...(solar.getFestivals() || [])); // 公历节日（元旦/劳动节/国庆…）
+    if (fest.length) parts.push(`· ${fest[0]}`);
+  } catch {
+    /* 农历计算失败不影响日期显示 */
+  }
+  nowDate.value = parts.join(" ");
 }
 
 function statusClass(s: Service) {

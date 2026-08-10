@@ -538,14 +538,15 @@ app.post("/api/admin/services/import", adminAuth, (req, res) => {
 });
 
 app.post("/api/admin/services", adminAuth, (req, res) => {
-  const { name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
+  const { group_id, name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
   if (!name || !url) return res.status(400).json({ error: "名称和地址必填" });
+  const gid = Number.isInteger(group_id) ? group_id : defaultGroupId();
   const info = db
     .prepare(
       "INSERT INTO services (group_id, name, url, description, icon, color, sort, docker_container, docker_image) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .run(
-      defaultGroupId(),
+      gid,
       name,
       url,
       description || "",
@@ -581,11 +582,11 @@ app.get("/api/admin/services/:id", adminAuth, (req, res) => {
 app.put("/api/admin/services/:id", adminAuth, (req, res) => {
   const s = db.prepare("SELECT * FROM services WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "服务不存在" });
-  const { name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
+  const { group_id, name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
   db.prepare(
     "UPDATE services SET group_id=?, name=?, url=?, description=?, icon=?, color=?, sort=?, docker_container=?, docker_image=? WHERE id=?"
   ).run(
-    s.group_id,
+    Number.isInteger(group_id) ? group_id : s.group_id,
     name ?? s.name,
     url ?? s.url,
     description ?? s.description,
