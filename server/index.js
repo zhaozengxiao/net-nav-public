@@ -12,7 +12,7 @@ const app = express();
 const PORT = 6666;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 // ---------- SSE 连接管理 ----------
 const clients = new Set();
@@ -110,6 +110,7 @@ function stripTags(s) {
 // 解析浏览器导出的书签 HTML（Netscape 格式），保留文件夹层级
 function parseBookmarksHtml(html) {
   const items = [];
+  const folders = []; // 出现的文件夹完整路径（含空文件夹）
   const pathStack = [];
   const re =
     /<DT>\s*(<H3[^>]*>([\s\S]*?)<\/H3>)|(<DL>|\s*<\/DL>)|<DT>\s*<A[^>]+href="([^"]*)"[^>]*>([\s\S]*?)<\/A>/gi;
@@ -117,6 +118,7 @@ function parseBookmarksHtml(html) {
   while ((m = re.exec(html))) {
     if (m[1]) {
       pathStack.push(stripTags(m[2])); // 文件夹入栈
+      if (pathStack.length) folders.push([...pathStack]);
     } else if (m[3] === "<DL>") {
       /* 进入文件夹内容区 */
     } else if (m[3]) {
@@ -129,7 +131,7 @@ function parseBookmarksHtml(html) {
       }
     }
   }
-  return items;
+  return { items, folders };
 }
 
 app.get("/api/bookmarks", (req, res) => {
@@ -139,6 +141,64 @@ app.get("/api/bookmarks", (req, res) => {
       .all()
       .map((r) => ({ ...r, path: (() => { try { return JSON.parse(r.path || "[]"); } catch { return []; } })() }))
   );
+});
+
+// 导出浏览器标准书签 HTML（Netscape 格式），保持当前树结构与排序
+function exportBookmarksHtml() {
+  const records = db
+    .prepare("SELECT name, url, path, sort FROM bookmarks ORDER BY sort, id")
+    .all()
+    .map((r) => ({ ...r, path: (() => { try { return JSON.parse(r.path || "[]"); } catch { return []; } })() }));
+  // 文件夹集合：占位行(url='') + 从书签 path 推导的前缀文件夹
+  const folderSet = new Set();
+  const folderSort = new Map();
+  records.forEach((r) => {
+    const key = JSON.stringify(r.path);
+    if (!r.url) {
+      folderSet.add(key);
+      if (!folderSort.has(key)) folderSort.set(key, r.sort);
+    }
+    for (let i = 1; i <= r.path.length; i++) {
+      const pre = JSON.stringify(r.path.slice(0, i));
+      folderSet.add(pre);
+      if (!folderSort.has(pre)) folderSort.set(pre, r.sort);
+    }
+  });
+  // 构建 children：书签（按所在文件夹 path）+ 文件夹节点（按父路径）
+  const children = new Map();
+  const addChild = (pk, node) => {
+    if (!children.has(pk)) children.set(pk, []);
+    children.get(pk).push(node);
+  };
+  records.filter((r) => r.url).forEach((r) => addChild(JSON.stringify(r.path), r));
+  folderSet.forEach((k) => {
+    const p = JSON.parse(k);
+    addChild(JSON.stringify(p.slice(0, -1)), { isFolder: true, path: p, name: p[p.length - 1], sort: folderSort.get(k) ?? 0 });
+  });
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const now = Math.floor(Date.now() / 1000);
+  let out = `<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n<TITLE>书签导出</TITLE>\n<H1>书签</H1>\n<DL><p>\n`;
+  const render = (pk, indent) => {
+    const list = (children.get(pk) || []).slice().sort((a, b) => a.sort - b.sort);
+    for (const it of list) {
+      if (!it.isFolder) {
+        out += `${indent}<DT><A HREF="${esc(it.url)}" ADD_DATE="${now}">${esc(it.name)}</A>\n`;
+      } else {
+        out += `${indent}<DT><H3 ADD_DATE="${now}">${esc(it.name)}</H3>\n${indent}<DL><p>\n`;
+        render(JSON.stringify(it.path), indent + "    ");
+        out += `${indent}</DL><p>\n`;
+      }
+    }
+  };
+  render("[]", "    ");
+  out += "</DL><p>\n";
+  return out;
+}
+
+app.get("/api/bookmarks/export", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="bookmarks.html"');
+  res.send(exportBookmarksHtml());
 });
 
 // 书签连通性检测（复用 monitor.probe，分批并发）
@@ -160,13 +220,29 @@ app.post("/api/bookmarks/check", (req, res) => {
 app.post("/api/bookmarks/import", (req, res) => {
   const { html } = req.body || {};
   if (!html || typeof html !== "string") return res.status(400).json({ error: "请上传浏览器导出的书签 HTML" });
-  const items = parseBookmarksHtml(html);
-  if (!items.length) return res.json({ added: 0, skipped: 0, total: 0 });
+  const { items, folders } = parseBookmarksHtml(html);
+  if (!items.length && !folders.length) return res.json({ added: 0, skipped: 0, total: 0 });
   const existing = new Set(db.prepare("SELECT url, path FROM bookmarks").all().map((r) => `${r.url}|${r.path}`));
   const ins = db.prepare("INSERT INTO bookmarks (name, url, sort, path) VALUES (?, ?, ?, ?)");
   let sort = db.prepare("SELECT COALESCE(MAX(sort),0) AS s FROM bookmarks").get().s;
   let added = 0,
     skipped = 0;
+  // 重建空文件夹占位行：HTML 中出现过、但没有任何书签的文件夹
+  const hasBookmark = new Set(items.map((it) => JSON.stringify(it.path)));
+  const seenFolder = new Set();
+  for (const f of folders) {
+    const key = JSON.stringify(f);
+    if (seenFolder.has(key) || hasBookmark.has(key)) continue; // 去重 / 有书签的文件夹不建占位
+    seenFolder.add(key);
+    const k2 = `|${key}`;
+    if (existing.has(k2)) {
+      skipped++;
+      continue;
+    }
+    ins.run(f[f.length - 1], "", ++sort, key);
+    existing.add(k2);
+    added++;
+  }
   for (const it of items) {
     const key = `${it.url}|${JSON.stringify(it.path)}`;
     if (existing.has(key)) {
@@ -177,7 +253,7 @@ app.post("/api/bookmarks/import", (req, res) => {
     existing.add(key);
     added++;
   }
-  res.json({ added, skipped, total: items.length });
+  res.json({ added, skipped, total: items.length + folders.length });
 });
 
 app.delete("/api/bookmarks/:id", (req, res) => {

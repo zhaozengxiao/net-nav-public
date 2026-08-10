@@ -106,6 +106,7 @@
       <el-tab-pane label="书签管理" name="bookmarks">
         <div class="toolbar">
           <el-button type="primary" @click="bmFileInput?.click()">📥 导入书签 HTML</el-button>
+          <el-button @click="exportBmHtml">📤 导出 HTML</el-button>
           <el-button @click="openNewFolder">➕ 新建文件夹</el-button>
           <el-button type="danger" plain :disabled="!bookmarks.length" @click="clearBookmarks">🗑️ 清空全部</el-button>
           <span class="bm-count">共 {{ bmCount }} 条</span>
@@ -532,6 +533,21 @@ async function loadAll() {
 
 // ---- 书签管理 ----
 const bmFileInput = ref<HTMLInputElement>();
+
+async function exportBmHtml() {
+  try {
+    const blob: any = await api.get("/bookmarks/export", { responseType: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "bookmarks.html";
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success("已导出书签 HTML");
+  } catch (e) {
+    handleErr(e);
+  }
+}
 const bookmarks = ref<any[]>([]);
 
 async function loadBookmarks() {
