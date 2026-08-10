@@ -647,6 +647,13 @@ function initGroupSortable() {
     handle: ".group-title",
     ghostClass: "sortable-ghost",
     disabled: !!keyword.value.trim(),
+    // 触屏：长按才可拖（防点标题折叠时误拖）；桌面鼠标无延迟
+    delay: 350,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 5,
+    onStart: () => {
+      if (navigator.vibrate) navigator.vibrate(10);
+    },
     onEnd: async () => {
       const ids = Array.from(document.querySelectorAll(".group-sec"))
         .map((c) => Number((c as HTMLElement).dataset.gid))
@@ -678,6 +685,13 @@ function initCardSortable() {
         animation: 150,
         ghostClass: "sortable-ghost",
         disabled: !!keyword.value.trim(), // 搜索过滤时不拖拽
+        // 触屏：长按 350ms 才启动拖拽（防滚动/点击误触）；桌面鼠标无延迟
+        delay: 350,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 5,
+        onStart: () => {
+          if (navigator.vibrate) navigator.vibrate(10);
+        },
         onEnd: async () => {
           const ids = Array.from(document.querySelectorAll(".cards .card"))
             .map((c) => Number((c as HTMLElement).dataset.id))
