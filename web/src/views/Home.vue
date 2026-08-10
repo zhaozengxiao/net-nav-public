@@ -12,6 +12,7 @@
         <div class="brand">🛰️ 内网导航</div>
       </div>
       <div class="top-actions">
+        <button class="icon-btn" title="检查更新" @click="checkUpdate">🔄</button>
         <button class="icon-btn" title="管理后台" @click="$router.push('/admin')">⚙️</button>
       </div>
     </header>
@@ -313,6 +314,29 @@ async function loadBookmarks() {
 async function removeBookmark(b: { id: number }) {
   await api.delete(`/bookmarks/${b.id}`);
   bookmarks.value = bookmarks.value.filter((x) => x.id !== b.id);
+}
+
+// 检查更新：对比本地版本与 GitHub 公开仓库
+async function checkUpdate() {
+  try {
+    const r: any = await api.get("/update-check");
+    if (!r.ok) return ElMessage.error(r.error || "检查失败");
+    if (r.hasUpdate) {
+      try {
+        await ElMessageBox.confirm(`发现新版本：${r.current} → ${r.latest}\n点击确定跳转仓库查看更新说明`, "🔄 有新版本", {
+          confirmButtonText: "去更新",
+          cancelButtonText: "取消",
+        });
+        window.open(r.url, "_blank");
+      } catch {
+        /* 取消 */
+      }
+    } else {
+      ElMessage.success(`已是最新版本（${r.latest}）`);
+    }
+  } catch {
+    ElMessage.error("检查更新失败（请确认可访问 GitHub）");
+  }
 }
 
 // ---- 右键快速编辑（书签/文件夹/服务卡片） ----

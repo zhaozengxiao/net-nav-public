@@ -11,8 +11,40 @@ const dockerCheck = require("./dockercheck");
 const app = express();
 const PORT = Number(process.env.PORT) || 6666;
 
+// 本地版本号：Docker 构建注入 GIT_COMMIT；本地开发读 git HEAD
+const GIT_COMMIT = (() => {
+  if (process.env.GIT_COMMIT && process.env.GIT_COMMIT !== "unknown") return process.env.GIT_COMMIT;
+  try {
+    return require("child_process").execSync("git rev-parse HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  } catch {
+    return "unknown";
+  }
+})();
+
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
+
+// 检查更新：对比本地版本与公开仓库 main 分支最新提交（用 atom feed，避免 API 限流）
+app.get("/api/update-check", async (req, res) => {
+  const repo = "zhaozengxiao/net-nav-public";
+  try {
+    const r = await fetch(`https://github.com/${repo}/commits/main.atom`, { headers: { "User-Agent": "net-nav" } });
+    if (!r.ok) return res.json({ ok: false, error: `检查失败（HTTP ${r.status}）` });
+    const xml = await r.text();
+    const m = xml.match(/Grit::Commit\/([0-9a-f]{40})/);
+    const latest = (m?.[1] || "").slice(0, 7);
+    const current = (GIT_COMMIT || "unknown").slice(0, 7);
+    res.json({
+      ok: true,
+      current,
+      latest,
+      hasUpdate: current !== "unknown" && !!latest && latest !== current,
+      url: `https://github.com/${repo}`,
+    });
+  } catch (e) {
+    res.json({ ok: false, error: "检查失败（网络不通或无法访问 GitHub）" });
+  }
+});
 
 // ---------- SSE 连接管理 ----------
 const clients = new Set();
