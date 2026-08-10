@@ -12,6 +12,7 @@
         <div class="brand">🛰️ 内网导航</div>
       </div>
       <div class="top-actions">
+        <button class="icon-btn" :class="{ active: groupMode }" title="分组显示" @click="groupMode = !groupMode">🗂️</button>
         <button class="icon-btn" title="检查更新" @click="checkUpdate">🔄</button>
         <button class="icon-btn" title="管理后台" @click="$router.push('/admin')">⚙️</button>
       </div>
@@ -62,9 +63,57 @@
       </div>
     </section>
 
-    <!-- 服务区（平铺） -->
+    <!-- 服务区（平铺/分组） -->
     <main class="content">
-      <div class="cards">
+      <!-- 分组模式：按分组渲染 -->
+      <template v-if="groupMode">
+        <section v-for="g in groupedServices" :key="g.id" class="group-sec">
+          <div class="group-title" @click="toggleGroup(g.id)">
+            <span class="group-caret">{{ groupCollapsed.has(g.id) ? "▸" : "▾" }}</span>
+            <span class="group-name">{{ g.name }}</span>
+            <span class="group-count">{{ g.list.length }} 个</span>
+          </div>
+          <div v-if="!groupCollapsed.has(g.id)" class="cards">
+            <a
+              v-for="s in g.list"
+              :key="s.id"
+              class="card"
+              :style="{ '--c': s.color }"
+              :href="s.url"
+              target="_blank"
+              rel="noopener"
+              @click="track(s)"
+              @contextmenu="showSvcCtx($event, s)"
+            >
+              <span class="status-dot" :class="statusClass(s)" :title="statusText(s)"></span>
+              <span
+                class="card-icon"
+                :style="{
+                  background: `radial-gradient(circle at 30% 25%, ${hexToRgba(s.color, 0.45)}, ${hexToRgba(s.color, 0.1)})`,
+                  borderColor: hexToRgba(s.color, 0.35),
+                  boxShadow: `0 4px 20px ${hexToRgba(s.color, 0.22)}`,
+                }"
+              >
+                {{ s.icon }}
+              </span>
+              <div class="card-body">
+                <div class="card-name">{{ s.name }}</div>
+                <div class="card-desc">{{ s.description || s.url }}</div>
+              </div>
+              <div class="card-foot">
+                <span class="card-status">{{ statusText(s) }}</span>
+                <span class="card-foot-right">
+                  <span v-if="s.docker_container" class="docker-badge" :class="dockerClass(s)">{{ dockerText(s) }}</span>
+                  <span class="card-clicks">🔥 {{ s.clicks }}</span>
+                </span>
+              </div>
+            </a>
+          </div>
+        </section>
+      </template>
+
+      <!-- 扁平模式：全部平铺 -->
+      <div v-else class="cards">
         <a
           v-for="s in filteredServices"
           :key="s.id"
@@ -123,6 +172,8 @@ interface Service {
   icon: string;
   color: string;
   clicks: number;
+  group_id: number;
+  groupName: string;
   status: { online: boolean; ms: number; code: number | null } | null;
 }
 
@@ -535,6 +586,27 @@ const filteredServices = computed(() => {
   );
 });
 
+// ---- 分组模式：按分组渲染，开关记忆到 localStorage，分组可折叠 ----
+const groupMode = ref(localStorage.getItem("nav_group_mode") === "1");
+watch(groupMode, (v) => localStorage.setItem("nav_group_mode", v ? "1" : "0"));
+
+const groupedServices = computed(() => {
+  const map = new Map<number, { id: number; name: string; list: Service[] }>();
+  for (const s of filteredServices.value) {
+    if (!map.has(s.group_id)) map.set(s.group_id, { id: s.group_id, name: s.groupName || "未分组", list: [] });
+    map.get(s.group_id)!.list.push(s);
+  }
+  return [...map.values()];
+});
+
+const groupCollapsed = ref<Set<number>>(new Set());
+function toggleGroup(id: number) {
+  const next = new Set(groupCollapsed.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  groupCollapsed.value = next;
+}
+
 const totalServices = computed(() => services.value.length);
 const onlineCount = computed(() => services.value.filter((s) => s.status?.online).length);
 
@@ -732,6 +804,45 @@ function onClickOutside(e: MouseEvent) {
 .icon-btn:hover {
   background: var(--card-hover);
   transform: translateY(-2px);
+}
+.icon-btn.active {
+  background: rgba(56, 132, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(56, 132, 255, 0.5);
+}
+
+/* 分组模式 */
+.group-sec {
+  margin-bottom: 22px;
+}
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 8px 4px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.group-title:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+.group-caret {
+  font-size: 11px;
+  color: var(--text-dim);
+  width: 14px;
+}
+.group-count {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.group-sec .cards {
+  margin-top: 2px;
 }
 
 /* 时钟区 */

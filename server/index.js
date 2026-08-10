@@ -116,7 +116,8 @@ function defaultGroupId() {
 
 app.get("/api/services", (req, res) => {
   const services = db.prepare("SELECT * FROM services ORDER BY sort, id").all();
-  res.json(services.map((s) => ({ ...s, status: monitor.cache.get(s.id) || null, docker: dockerCache.get(s.id) || null })));
+  const gmap = new Map(db.prepare("SELECT id, name FROM groups").all().map((g) => [g.id, g.name]));
+  res.json(services.map((s) => ({ ...s, groupName: gmap.get(s.group_id) || "未分组", status: monitor.cache.get(s.id) || null, docker: dockerCache.get(s.id) || null })));
 });
 
 // 点击计数
