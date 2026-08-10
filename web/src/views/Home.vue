@@ -643,6 +643,7 @@ function initCardSortable() {
           try {
             await api.put("/admin/services/reorder", { ids });
             ElMessage.success("排序已保存");
+            await load(); // 重新拉取服务，同步前端顺序（避免切换分组/扁平时复位）
           } catch {
             ElMessage.error("保存排序失败（请先在后台登录）");
           }
