@@ -110,6 +110,41 @@ Authorization: Bearer <token>
 响应：`{ "ok": true, "addedGroups": 1, "addedServices": 6, "skippedServices": 0 }`
 > 分组按名称复用/新建；服务按 `name+url` 去重；导入后自动异步探测新服务状态。
 
+### 3.10 查询分组列表（公开）
+```bash
+GET /api/groups
+```
+响应：分组数组 `[{ "id": 1, "name": "Home", "icon": "📁", "sort": 0, "collapsed": 0 }]`（按 sort 排序）。首页分组模式按此顺序渲染，AI 可先查此了解分组结构。
+
+### 3.11 新建分组
+```bash
+POST /api/admin/groups            # 需认证
+{ "name": "开发", "icon": "📁" }
+```
+响应：`{ "id": 3 }`
+
+### 3.12 重命名分组（或改图标/折叠状态）
+```bash
+PUT /api/admin/groups/:id         # 需认证，字段可部分提交
+{ "name": "研发", "icon": "🛠️", "collapsed": false }
+```
+响应：`{ "ok": true }`
+
+### 3.13 删除分组（含组内服务）
+```bash
+DELETE /api/admin/groups/:id      # 需认证
+```
+响应：`{ "ok": true }`
+> ⚠️ 会连同该分组下全部服务一并删除。
+
+### 3.14 分组排序
+```bash
+PUT /api/admin/groups/reorder     # 需认证
+{ "ids": [3, 1, 2] }            # 按数组顺序设置 sort（后台拖拽 / 首页拖标题共用）
+```
+响应：`{ "ok": true }`
+> 服务接口 3.3/3.4 支持 `group_id` 字段，可直接把服务分配到指定分组。
+
 ---
 
 ## 4. 书签管理接口（公开，无需认证）
