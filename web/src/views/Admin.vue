@@ -9,20 +9,50 @@
     </div>
 
     <el-tabs v-model="tab">
-      <!-- ===== 分组管理（一级，排在服务管理前） ===== -->
+      <!-- ===== 分组管理（一级，排在服务管理前，UI 仿服务管理） ===== -->
       <el-tab-pane label="分组管理" name="groups">
-        <div class="group-new">
-          <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="flex: 1" />
+        <div class="toolbar">
+          <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="max-width: 300px" />
           <el-button type="primary" @click="saveGroup">➕ 新建分组</el-button>
         </div>
-        <div class="group-list" ref="groupListEl">
-          <div v-for="g in groups" :key="g.id" class="group-row" :data-id="g.id">
-            <span class="drag-handle" title="拖动排序">⠿</span>
-            <span class="group-ico">{{ g.icon }}</span>
-            <span class="group-name">{{ g.name }}</span>
-            <span class="group-cnt">{{ svcCountOf(g.id) }} 个服务</span>
-            <el-button size="small" @click="renameGroup(g)">重命名</el-button>
-            <el-button size="small" type="danger" plain @click="deleteGroup(g)">删除</el-button>
+
+        <!-- 桌面端：表格 -->
+        <div v-if="!isMobile" class="g-table-wrap table-wrap">
+          <el-table :data="groups" :row-key="(r: any) => r.id">
+            <el-table-column label="" width="44">
+              <template #default><span class="drag-handle" title="拖动排序">⠿</span></template>
+            </el-table-column>
+            <el-table-column label="图标" width="72">
+              <template #default="{ row }"><span class="t-icon">{{ row.icon }}</span></template>
+            </el-table-column>
+            <el-table-column label="名称" min-width="160">
+              <template #default="{ row }"><span class="t-name">{{ row.name }}</span></template>
+            </el-table-column>
+            <el-table-column label="服务数" width="100">
+              <template #default="{ row }"><span class="t-group">{{ svcCountOf(row.id) }} 个</span></template>
+            </el-table-column>
+            <el-table-column label="操作" width="170">
+              <template #default="{ row }">
+                <el-button size="small" @click="renameGroup(row)">重命名</el-button>
+                <el-button size="small" type="danger" plain @click="deleteGroup(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 移动端：卡片列表 -->
+        <div v-else class="g-card-list card-list">
+          <div v-for="g in groups" :key="g.id" class="m-card">
+            <span class="drag-handle m-handle" title="拖动排序">⠿</span>
+            <span class="m-icon">{{ g.icon }}</span>
+            <div class="m-body">
+              <div class="m-title">{{ g.name }}</div>
+              <div class="m-sub">{{ svcCountOf(g.id) }} 个服务</div>
+            </div>
+            <div class="m-actions">
+              <el-button size="small" circle @click="renameGroup(g)"><el-icon><Edit /></el-icon></el-button>
+              <el-button size="small" circle type="danger" @click="deleteGroup(g)"><el-icon><Delete /></el-icon></el-button>
+            </div>
           </div>
           <div v-if="!groups.length" class="m-empty">暂无分组，先新建一个</div>
         </div>
@@ -341,10 +371,10 @@ const svcDlg = ref(false);
 const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: 0 });
 const groups = ref<any[]>([]);
 
-// ---- 分组管理（一级 tab） ----
+// ---- 分组管理（一级 tab，UI 仿服务管理：表格/移动卡片，拖拽排序） ----
 const newGroupName = ref("");
-const groupListEl = ref<HTMLElement>();
 let groupSortable: Sortable | null = null;
+let groupSortableMobile: Sortable | null = null;
 
 async function loadGroups() {
   groups.value = await api.get("/admin/groups");
@@ -353,25 +383,43 @@ async function loadGroups() {
 }
 function initGroupSortable() {
   if (groupSortable) groupSortable.destroy();
-  if (!groupListEl.value) return;
-  groupSortable = Sortable.create(groupListEl.value, {
-    animation: 150,
-    handle: ".drag-handle",
-    ghostClass: "sortable-ghost",
-    onEnd: async () => {
-      const ids = Array.from(groupListEl.value!.querySelectorAll(".group-row"))
-        .map((r) => Number((r as HTMLElement).dataset.id))
-        .filter((n) => Number.isInteger(n));
-      if (ids.length < 2) return;
-      try {
-        await api.put("/admin/groups/reorder", { ids });
-        ElMessage.success("分组顺序已保存");
-        groups.value.sort((a: any, b: any) => ids.indexOf(a.id) - ids.indexOf(b.id));
-      } catch (e) {
-        handleErr(e);
-      }
-    },
-  });
+  if (groupSortableMobile) groupSortableMobile.destroy();
+  groupSortable = null;
+  groupSortableMobile = null;
+  const tbody = document.querySelector(".g-table-wrap .el-table__body-wrapper tbody");
+  if (tbody) {
+    groupSortable = Sortable.create(tbody as HTMLElement, {
+      animation: 180,
+      handle: ".drag-handle",
+      ghostClass: "sortable-ghost",
+      onEnd: saveGroupOrder,
+    });
+  }
+  const list = document.querySelector(".g-card-list");
+  if (list) {
+    groupSortableMobile = Sortable.create(list as HTMLElement, {
+      animation: 180,
+      handle: ".drag-handle",
+      ghostClass: "sortable-ghost",
+      onEnd: saveGroupOrder,
+    });
+  }
+}
+async function saveGroupOrder() {
+  const nameOrder = Array.from(
+    document.querySelectorAll(".g-table-wrap .el-table__body-wrapper tbody .t-name, .g-card-list .m-title")
+  ).map((el) => (el.textContent || "").trim());
+  const ids = nameOrder
+    .map((n) => groups.value.find((g: any) => g.name === n)?.id)
+    .filter((n) => Number.isInteger(n));
+  if (ids.length < 2) return;
+  try {
+    await api.put("/admin/groups/reorder", { ids });
+    ElMessage.success("分组顺序已保存");
+    groups.value.sort((a: any, b: any) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  } catch (e) {
+    handleErr(e);
+  }
 }
 function svcCountOf(gid: number) {
   return services.value.filter((s: any) => s.group_id === gid).length;
@@ -1230,32 +1278,9 @@ async function removeService(row: any) {
   margin-bottom: 14px;
 }
 
-/* 分组管理 */
-.group-new {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.group-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border: 1px solid var(--el-border-color-lighter, rgba(148, 163, 184, 0.2));
-  border-radius: 8px;
-  margin-bottom: 8px;
-}
-.group-ico {
-  font-size: 16px;
-}
-.group-row .group-name {
-  flex: 1;
-  font-weight: 600;
-}
-.group-cnt {
-  font-size: 12px;
-  color: var(--el-text-color-secondary, #94a3b8);
-  margin-right: 6px;
+/* 分组管理（UI 与服务管理一致，表格/移动卡片） */
+.g-table-wrap {
+  margin-top: 4px;
 }
 .t-group {
   font-size: 12px;

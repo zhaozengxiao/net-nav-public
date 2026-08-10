@@ -839,11 +839,11 @@ onMounted(() => {
   connectSSE(); // 状态实时推送，无需轮询
   document.addEventListener("click", onClickOutside);
   document.addEventListener("contextmenu", onDocCtx);
-  // 服务加载完成后初始化卡片拖拽
-  const stopWatch = watch(services, async () => {
+  // 服务/分组加载完成后初始化拖拽
+  watch([services, groupsData, keyword, groupMode, groupCollapsed], async () => {
     await nextTick();
+    initGroupSortable();
     initCardSortable();
-    stopWatch();
   });
 });
 
