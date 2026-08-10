@@ -1,8 +1,32 @@
 // 服务状态检测器：并行探测 + 变化感知（只返回有变化的状态）
 const db = require("./db");
+const http = require("http");
+const https = require("https");
 
 const cache = new Map(); // id -> { online, ms, code, checkedAt }
 const TIMEOUT = 3000;
+
+// 探测只关心连通性，不校验证书可信度（内网大量自签名/过期证书 https 服务）
+// 支持 http/https，跟随重定向（最多 3 跳），超时 3s
+function probe(url) {
+  const start = Date.now();
+  const requestOnce = (u, redirects) =>
+    new Promise((resolve) => {
+      const mod = u.startsWith("https") ? https : http;
+      const req = mod.get(u, { rejectUnauthorized: false, timeout: TIMEOUT }, (res) => {
+        res.resume();
+        const loc = res.headers.location;
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && loc && redirects > 0) {
+          resolve(requestOnce(new URL(loc, u).toString(), redirects - 1));
+          return;
+        }
+        resolve({ online: true, ms: Date.now() - start, code: res.statusCode });
+      });
+      req.on("timeout", () => req.destroy());
+      req.on("error", () => resolve({ online: false, ms: -1, code: null }));
+    });
+  return requestOnce(url, 3);
+}
 
 let onChange = null; // 状态变化回调（由 index.js 注入，用于 SSE 广播）
 
@@ -10,19 +34,7 @@ function setOnChange(fn) {
   onChange = fn;
 }
 
-async function probe(url) {
-  const start = Date.now();
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
-  try {
-    const res = await fetch(url, { method: "GET", signal: ctrl.signal, redirect: "follow" });
-    clearTimeout(timer);
-    return { online: true, ms: Date.now() - start, code: res.status };
-  } catch {
-    clearTimeout(timer);
-    return { online: false, ms: -1, code: null };
-  }
-}
+
 
 async function runProbe() {
   const services = db.prepare("SELECT id, url FROM services").all();
