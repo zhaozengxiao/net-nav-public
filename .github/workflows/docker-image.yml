@@ -1,5 +1,5 @@
 # 推送 main 分支或 v* 标签时自动构建并发布 Docker 镜像到 GHCR
-# 镜像地址: ghcr.io/zhaozengxiao/net-nav
+# 镜像地址: ghcr.io/zhaozengxiao/net-nav-public
 name: build-and-push-image
 
 on:
@@ -44,6 +44,6 @@ jobs:
           push: true
           build-args: GIT_COMMIT=${{ github.sha }}
           tags: |
-            ghcr.io/zhaozengxiao/net-nav:latest
-            ghcr.io/zhaozengxiao/net-nav:${{ steps.meta.outputs.sha }}
-            ${{ github.ref_type == 'tag' && format('ghcr.io/zhaozengxiao/net-nav:{0}', github.ref_name) || '' }}
+            ghcr.io/zhaozengxiao/net-nav-public:latest
+            ghcr.io/zhaozengxiao/net-nav-public:${{ steps.meta.outputs.sha }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/zhaozengxiao/net-nav-public:{0}', github.ref_name) || '' }}
