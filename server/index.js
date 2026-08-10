@@ -202,19 +202,28 @@ app.get("/api/bookmarks/export", (req, res) => {
 });
 
 // 书签连通性检测（复用 monitor.probe，分批并发）
-app.post("/api/bookmarks/check", (req, res) => {
+// 流式检测：并发探测，每完成一条立即以 NDJSON 推送，前端边收边更新状态点
+app.post("/api/bookmarks/check-stream", (req, res) => {
   const urls = (req.body?.urls || []).filter((u) => typeof u === "string");
-  const out = {};
-  (async () => {
-    for (let i = 0; i < urls.length; i += 5) {
-      const batch = urls.slice(i, i + 5);
-      const results = await Promise.allSettled(batch.map((u) => monitor.probe(u)));
-      batch.forEach((u, j) => {
-        out[u] = results[j].status === "fulfilled" ? results[j].value : { online: false, ms: -1, code: null };
-      });
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (!urls.length) return res.end();
+  const CONCURRENCY = 12;
+  let i = 0;
+  const work = async () => {
+    while (i < urls.length) {
+      const u = urls[i++];
+      let r;
+      try {
+        r = await monitor.probe(u);
+      } catch {
+        r = { online: false, ms: -1, code: null };
+      }
+      res.write(JSON.stringify({ url: u, ...r }) + "\n");
     }
-    res.json(out);
-  })();
+  };
+  Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, work)).then(() => res.end());
 });
 
 app.post("/api/bookmarks/import", (req, res) => {

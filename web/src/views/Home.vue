@@ -148,12 +148,33 @@ async function checkBookmarks(urls?: string[]) {
   }
   if (!todo.length) return;
   try {
-    // 检测中状态至少展示 300ms（内网探测太快，避免看不到"先灰后结果"的过程）
-    const [r] = await Promise.all([
-      api.post("/bookmarks/check", { urls: todo }),
-      new Promise((res) => setTimeout(res, 300)),
-    ]);
-    bmStatus.value = { ...bmStatus.value, ...r };
+    // 流式检测：每完成一条立即返回，边收边更新状态点（不等待全部）
+    const resp = await fetch("/api/bookmarks/check-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls: todo }),
+    });
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() || "";
+      const next: Record<string, { online: boolean; ms: number }> = {};
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const d = JSON.parse(line);
+          next[d.url] = { online: d.online, ms: d.ms };
+        } catch {
+          /* 忽略不完整行 */
+        }
+      }
+      if (Object.keys(next).length) bmStatus.value = { ...bmStatus.value, ...next };
+    }
   } catch {
     /* 检测失败保持 unknown */
   }
