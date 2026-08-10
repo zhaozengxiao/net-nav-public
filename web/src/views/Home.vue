@@ -933,9 +933,15 @@ function onClickOutside(e: MouseEvent) {
   box-shadow: 0 0 0 1px rgba(56, 132, 255, 0.5);
 }
 
-/* 分组模式 */
+/* 分组模式：每组常驻玻璃拟态背景区块 */
 .group-sec {
   margin-bottom: 22px;
+  padding: 14px 16px 18px;
+  background: linear-gradient(160deg, rgba(30, 41, 66, 0.5), rgba(15, 23, 42, 0.35));
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 14px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
 }
 
 /* 卡片拖拽 */
