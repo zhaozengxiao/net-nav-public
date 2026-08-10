@@ -15,8 +15,9 @@
           <el-input v-model="newGroupName" placeholder="新分组名称，如：开发" @keyup.enter="saveGroup" style="flex: 1" />
           <el-button type="primary" @click="saveGroup">➕ 新建分组</el-button>
         </div>
-        <div class="group-list">
-          <div v-for="g in groups" :key="g.id" class="group-row">
+        <div class="group-list" ref="groupListEl">
+          <div v-for="g in groups" :key="g.id" class="group-row" :data-id="g.id">
+            <span class="drag-handle" title="拖动排序">⠿</span>
             <span class="group-ico">{{ g.icon }}</span>
             <span class="group-name">{{ g.name }}</span>
             <span class="group-cnt">{{ svcCountOf(g.id) }} 个服务</span>
@@ -342,9 +343,35 @@ const groups = ref<any[]>([]);
 
 // ---- 分组管理（一级 tab） ----
 const newGroupName = ref("");
+const groupListEl = ref<HTMLElement>();
+let groupSortable: Sortable | null = null;
 
 async function loadGroups() {
   groups.value = await api.get("/admin/groups");
+  await nextTick();
+  initGroupSortable();
+}
+function initGroupSortable() {
+  if (groupSortable) groupSortable.destroy();
+  if (!groupListEl.value) return;
+  groupSortable = Sortable.create(groupListEl.value, {
+    animation: 150,
+    handle: ".drag-handle",
+    ghostClass: "sortable-ghost",
+    onEnd: async () => {
+      const ids = Array.from(groupListEl.value!.querySelectorAll(".group-row"))
+        .map((r) => Number((r as HTMLElement).dataset.id))
+        .filter((n) => Number.isInteger(n));
+      if (ids.length < 2) return;
+      try {
+        await api.put("/admin/groups/reorder", { ids });
+        ElMessage.success("分组顺序已保存");
+        groups.value.sort((a: any, b: any) => ids.indexOf(a.id) - ids.indexOf(b.id));
+      } catch (e) {
+        handleErr(e);
+      }
+    },
+  });
 }
 function svcCountOf(gid: number) {
   return services.value.filter((s: any) => s.group_id === gid).length;

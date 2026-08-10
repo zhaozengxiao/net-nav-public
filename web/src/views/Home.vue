@@ -67,7 +67,7 @@
     <main class="content">
       <!-- 分组模式：按分组渲染 -->
       <template v-if="groupMode">
-        <section v-for="g in groupedServices" :key="g.id" class="group-sec">
+        <section v-for="g in groupedServices" :key="g.id" class="group-sec" :data-gid="g.id">
           <div class="group-title" @click="toggleGroup(g.id)">
             <span class="group-caret">{{ groupCollapsed.has(g.id) ? "▸" : "▾" }}</span>
             <span class="group-name">{{ g.name }}</span>
@@ -599,13 +599,25 @@ const filteredServices = computed(() => {
 const groupMode = ref(localStorage.getItem("nav_group_mode") === "1");
 watch(groupMode, (v) => localStorage.setItem("nav_group_mode", v ? "1" : "0"));
 
+const groupsData = ref<{ id: number; name: string; icon: string }[]>([]);
+
 const groupedServices = computed(() => {
   const map = new Map<number, { id: number; name: string; list: Service[] }>();
   for (const s of filteredServices.value) {
     if (!map.has(s.group_id)) map.set(s.group_id, { id: s.group_id, name: s.groupName || "未分组", list: [] });
     map.get(s.group_id)!.list.push(s);
   }
-  return [...map.values()];
+  // 按分组管理设置的顺序渲染（GET /api/groups），未匹配的组排后面
+  const result: { id: number; name: string; list: Service[] }[] = [];
+  for (const g of groupsData.value) {
+    const item = map.get(g.id);
+    if (item) {
+      result.push(item);
+      map.delete(g.id);
+    }
+  }
+  for (const item of map.values()) result.push(item);
+  return result;
 });
 
 const groupCollapsed = ref<Set<number>>(new Set());
@@ -619,6 +631,37 @@ function toggleGroup(id: number) {
 // ---- 服务卡片拖拽排序（首页直接调整顺序，写回 sort） ----
 const cardsWrap = ref<HTMLElement>();
 let cardSortables: Sortable[] = [];
+let groupSortable: Sortable | null = null;
+
+function initGroupSortable() {
+  if (groupSortable) {
+    groupSortable.destroy();
+    groupSortable = null;
+  }
+  if (!groupMode.value) return;
+  const el = document.querySelector(".content");
+  if (!el) return;
+  groupSortable = Sortable.create(el as HTMLElement, {
+    animation: 150,
+    draggable: ".group-sec",
+    handle: ".group-title",
+    ghostClass: "sortable-ghost",
+    disabled: !!keyword.value.trim(),
+    onEnd: async () => {
+      const ids = Array.from(document.querySelectorAll(".group-sec"))
+        .map((c) => Number((c as HTMLElement).dataset.gid))
+        .filter((n) => Number.isInteger(n));
+      if (ids.length < 2) return;
+      try {
+        await api.put("/admin/groups/reorder", { ids });
+        ElMessage.success("分组顺序已保存");
+        await load();
+      } catch {
+        ElMessage.error("保存分组顺序失败（请先在后台登录）");
+      }
+    },
+  });
+}
 
 function initCardSortable() {
   cardSortables.forEach((s) => s.destroy());
@@ -655,6 +698,7 @@ function initCardSortable() {
 
 watch([keyword, groupMode, groupCollapsed], async () => {
   await nextTick();
+  initGroupSortable();
   initCardSortable();
 });
 
@@ -748,6 +792,11 @@ async function load() {
     services.value = await api.get("/services");
   } catch {
     /* 后端未启动时静默 */
+  }
+  try {
+    groupsData.value = await api.get("/groups");
+  } catch {
+    /* 分组加载失败静默 */
   }
 }
 

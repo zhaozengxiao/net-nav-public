@@ -410,8 +410,24 @@ app.post("/api/admin/scan", adminAuth, async (req, res) => {
 });
 
 // ---------- 管理：分组 CRUD ----------
+// 分组列表（公开：首页分组模式按此顺序渲染分组）
+app.get("/api/groups", (req, res) => {
+  res.json(db.prepare("SELECT * FROM groups ORDER BY sort, id").all());
+});
+
 app.get("/api/admin/groups", adminAuth, (req, res) => {
   res.json(db.prepare("SELECT * FROM groups ORDER BY sort, id").all());
+});
+
+// 分组拖拽排序（后台分组管理 + 首页拖标题共用）
+app.put("/api/admin/groups/reorder", adminAuth, (req, res) => {
+  const ids = req.body?.ids;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids 必填" });
+  const tx = db.transaction(() => {
+    ids.forEach((id, i) => db.prepare("UPDATE groups SET sort = ? WHERE id = ?").run(i, id));
+  });
+  tx();
+  res.json({ ok: true });
 });
 
 app.post("/api/admin/groups", adminAuth, (req, res) => {
