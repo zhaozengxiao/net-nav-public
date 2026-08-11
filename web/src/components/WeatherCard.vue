@@ -133,7 +133,6 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   transition: all 0.25s;
   user-select: none;
   overflow: hidden;
-  position: relative;
 }
 .weather-card:hover {
   transform: translateY(-4px);
