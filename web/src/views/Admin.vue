@@ -72,7 +72,7 @@
         </div>
 
         <!-- 桌面端：表格（主题化） -->
-        <div v-if="!isMobile" class="table-wrap">
+        <div v-if="!isMobile" class="svc-table-wrap table-wrap">
           <el-table :data="services" :row-key="(r: any) => r.id">
             <el-table-column label="" width="44">
               <template #default>
@@ -126,7 +126,7 @@
         </div>
 
         <!-- 移动端：卡片列表 -->
-        <div v-else class="card-list">
+        <div v-else class="svc-card-list card-list">
           <div v-for="s in services" :key="s.id" class="m-card">
             <span class="drag-handle m-handle" title="拖动排序">⠿</span>
             <span
@@ -458,7 +458,7 @@ function reorder(evt: Sortable.SortableEvent) {
 function initSortable() {
   nextTick(() => {
     destroySortable();
-    const tbody = document.querySelector(".table-wrap .el-table__body-wrapper tbody");
+    const tbody = document.querySelector(".svc-table-wrap .el-table__body-wrapper tbody");
     if (tbody) {
       sortableTable = new Sortable(tbody as HTMLElement, {
         animation: 180,
@@ -467,7 +467,7 @@ function initSortable() {
         onEnd: reorder,
       });
     }
-    const list = document.querySelector(".card-list");
+    const list = document.querySelector(".svc-card-list");
     if (list) {
       sortableMobile = new Sortable(list as HTMLElement, {
         animation: 180,
