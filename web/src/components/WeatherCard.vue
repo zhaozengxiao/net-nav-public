@@ -174,6 +174,10 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   gap: 14px;
   margin-bottom: 10px;
 }
+.w-icon,
+.w-day-icon {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", "EmojiOne Color", sans-serif;
+}
 .w-icon {
   font-size: 48px;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
