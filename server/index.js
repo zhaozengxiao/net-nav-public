@@ -24,6 +24,53 @@ const GIT_COMMIT = (() => {
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
+// 天气：代理中央气象台（免 key），10 分钟缓存，实时 + 3 天预报（两个接口合并）
+let weatherCache = { key: "", data: null, at: 0 };
+app.get("/api/weather", async (req, res) => {
+  const city = String(req.query.city || "").trim() || "54823"; // 默认济南
+  if (weatherCache.key === city && Date.now() - weatherCache.at < 600000) {
+    return res.json({ ok: true, cached: true, ...weatherCache.data });
+  }
+  try {
+    const headers = { "User-Agent": "Mozilla/5.0" };
+    // 实时（now 接口）+ 预报（weather 接口）并行
+    const [nowR, wR] = await Promise.all([
+      fetch(`https://weather.cma.cn/api/now/${city}`, { headers }),
+      fetch(`https://weather.cma.cn/api/weather/${city}`, { headers }),
+    ]);
+    if (!nowR.ok || !wR.ok) return res.status(502).json({ ok: false, error: `天气源 HTTP ${nowR.status}/${wR.status}` });
+    const nowD = await nowR.json();
+    const wD = await wR.json();
+    if (nowD.code !== 0 || wD.code !== 0) return res.status(502).json({ ok: false, error: "城市站号无效" });
+    const now = nowD.data.now;
+    const daily = (wD.data.daily || []).slice(0, 3); // 取前 3 天
+    const data = {
+      city: nowD.data.location.name,
+      path: nowD.data.location.path,
+      // 实时
+      temperature: now.temperature,
+      feelst: now.feelst,
+      humidity: now.humidity,
+      windScale: now.windScale,
+      windDirection: now.windDirection,
+      precipitation: now.precipitation,
+      lastUpdate: nowD.data.lastUpdate,
+      // 3 天预报
+      forecast: daily.map(day => ({
+        date: day.date.slice(5), // MM/DD
+        high: day.high,
+        low: day.low,
+        dayText: day.dayText,
+        dayCode: day.dayCode,
+      })),
+    };
+    weatherCache = { key: city, data, at: Date.now() };
+    res.json({ ok: true, cached: false, ...data });
+  } catch (e) {
+    res.status(502).json({ ok: false, error: "天气获取失败（网络不通）" });
+  }
+});
+
 // 检查更新：对比本地版本与公开仓库 main 分支最新提交（用 atom feed，避免 API 限流）
 app.get("/api/update-check", async (req, res) => {
   const repo = "zhaozengxiao/net-nav-public";
@@ -76,9 +123,14 @@ app.get("/api/events", (req, res) => {
 });
 
 // ---------- 管理认证（支持多会话，token 存列表互不踢） ----------
+// token 内存缓存（5s TTL），避免每请求查库；登录时失效
+let tokenCache = { list: [], at: 0 };
 function getTokens() {
+  if (tokenCache.at && Date.now() - tokenCache.at < 5000) return tokenCache.list;
   try {
-    return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='admin_tokens'").get()?.value || "[]");
+    const list = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='admin_tokens'").get()?.value || "[]");
+    tokenCache = { list, at: Date.now() };
+    return list;
   } catch {
     return [];
   }
@@ -100,6 +152,7 @@ app.post("/api/admin/login", (req, res) => {
   tokens.push(token);
   if (tokens.length > 10) tokens.splice(0, tokens.length - 10); // 保留最近 10 个会话
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('admin_tokens', ?)").run(JSON.stringify(tokens));
+  tokenCache = { list: tokens, at: 0 }; // 立即失效缓存
   res.json({ token });
 });
 
@@ -136,6 +189,16 @@ app.post("/api/favorite/:id", (req, res) => {
 });
 
 // ---------- 书签（浏览器书签导入，支持文件夹） ----------
+// 安全解析书签 path 字段（JSON 数组，失败/非数组返回空数组）
+function parsePath(p) {
+  try {
+    const v = JSON.parse(p || "[]");
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
 function stripTags(s) {
   return s.replace(/<[^>]+>/g, "").trim();
 }
@@ -172,7 +235,7 @@ app.get("/api/bookmarks", (req, res) => {
     db
       .prepare("SELECT * FROM bookmarks ORDER BY sort, id")
       .all()
-      .map((r) => ({ ...r, path: (() => { try { return JSON.parse(r.path || "[]"); } catch { return []; } })() }))
+      .map((r) => ({ ...r, path: parsePath(r.path) }))
   );
 });
 
@@ -181,7 +244,7 @@ function exportBookmarksHtml() {
   const records = db
     .prepare("SELECT name, url, path, sort FROM bookmarks ORDER BY sort, id")
     .all()
-    .map((r) => ({ ...r, path: (() => { try { return JSON.parse(r.path || "[]"); } catch { return []; } })() }));
+    .map((r) => ({ ...r, path: parsePath(r.path) }));
   // 文件夹集合：占位行(url='') + 从书签 path 推导的前缀文件夹
   const folderSet = new Set();
   const folderSort = new Map();
@@ -314,7 +377,11 @@ app.post("/api/bookmarks/reorder", (req, res) => {
   let changed = 0;
   ids.forEach((id, i) => {
     changed += upd.run(i + 1, id).changes;
-    if (Array.isArray(paths[id])) updPath.run(JSON.stringify(paths[id]), id);
+    const p = paths[id];
+    // 校验：路径必须是字符串数组（防脏数据）
+    if (Array.isArray(p) && p.every((seg) => typeof seg === "string")) {
+      updPath.run(JSON.stringify(p), id);
+    }
   });
   res.json({ ok: true, changed });
 });
@@ -358,9 +425,8 @@ app.post("/api/bookmarks/rename-folder", (req, res) => {
   const upd = db.prepare("UPDATE bookmarks SET path = ? WHERE id = ?");
   let changed = 0;
   for (const r of rows) {
-    let p;
-    try { p = JSON.parse(r.path); } catch { continue; }
-    if (!Array.isArray(p)) continue;
+    const p = parsePath(r.path);
+    if (!p.length) continue;
     const isSelf = JSON.stringify(p) === oldJson;
     const isChild = !isSelf && p.length > oldPath.length && oldPath.every((seg, i) => p[i] === seg);
     if (isSelf) {
@@ -385,9 +451,8 @@ app.post("/api/bookmarks/delete-folder", (req, res) => {
   const del = db.prepare("DELETE FROM bookmarks WHERE id = ?");
   let removed = 0;
   for (const r of rows) {
-    let p;
-    try { p = JSON.parse(r.path); } catch { continue; }
-    if (!Array.isArray(p) || p.length < path.length) continue;
+    const p = parsePath(r.path);
+    if (!p.length || p.length < path.length) continue;
     if (path.every((seg, i) => p[i] === seg)) {
       del.run(r.id);
       removed++;
@@ -628,9 +693,12 @@ app.delete("/api/admin/services/:id", adminAuth, (req, res) => {
 const dockerCache = new Map();
 let dockerChecking = false;
 
+let dockerCfgCache = null; // 缓存 SSH 配置，更新时失效
 function dockerCfg() {
+  if (dockerCfgCache) return dockerCfgCache;
   try {
-    return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='docker_ssh'").get()?.value || "null");
+    dockerCfgCache = JSON.parse(db.prepare("SELECT value FROM settings WHERE key='docker_ssh'").get()?.value || "null");
+    return dockerCfgCache;
   } catch {
     return null;
   }
@@ -686,6 +754,7 @@ app.put("/api/admin/docker-config", adminAuth, (req, res) => {
   const { host, port, user, pass } = req.body || {};
   const cfg = { host: host || "", port: Number(port) || 22, user: user || "", pass: pass || "" };
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('docker_ssh', ?)").run(JSON.stringify(cfg));
+  dockerCfgCache = null; // 失效缓存
   res.json({ ok: true });
   setTimeout(scheduleDockerChecks, 300); // 配置后立即检测一轮
 });

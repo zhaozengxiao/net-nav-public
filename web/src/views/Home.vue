@@ -56,21 +56,24 @@
 
     <!-- 时钟区 -->
     <section class="hero">
-      <div class="greeting">{{ greeting }}，{{ nowDate }}</div>
-      <Vue3FlipClock />
-      <div class="sub">
-        共 {{ totalServices }} 个服务 · {{ onlineCount }} 个在线 ·
-        <span class="sse-dot" :class="sseState"></span>{{ sseText }}
+      <div class="hero-spacer"></div>
+      <div class="hero-center">
+        <div class="greeting">{{ greeting }}，{{ nowDate }}</div>
+        <Vue3FlipClock />
+        <div class="sub">
+          共 {{ totalServices }} 个服务 · {{ onlineCount }} 个在线 ·
+          <span class="sse-dot" :class="sseState"></span>{{ sseText }}
+        </div>
       </div>
+      <WeatherCard />
 
+    </section>
       <div class="search-box" @click="focusSearch">
+
         <span class="search-icon">🔍</span>
         <input ref="searchInputRef" v-model="keyword" placeholder="搜索服务名称、描述…" />
         <span v-if="keyword" class="search-clear" @click.stop="clearSearch">✕</span>
       </div>
-    </section>
-
-    <!-- 服务区（平铺/分组） -->
     <main class="content">
       <!-- 分组模式：按分组渲染 -->
       <template v-if="groupMode">
@@ -173,6 +176,7 @@ import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Solar } from "lunar-javascript";
 import Sortable from "sortablejs";
+import WeatherCard from "../components/WeatherCard.vue";
 import api from "../api";
 
 interface Service {
@@ -379,8 +383,7 @@ async function removeBookmark(b: { id: number }) {
 }
 
 // 检查更新：对比本地版本与 GitHub 公开仓库
-async function checkUpdate() {
-  try {
+async function checkUpdate() {  try {
     const r: any = await api.get("/update-check");
     if (!r.ok) return ElMessage.error(r.error || "检查失败");
     if (r.hasUpdate) {
@@ -419,6 +422,15 @@ function showSvcCtx(e: MouseEvent, s: Service) {
 function closeCtx() {
   ctxMenu.value = null;
 }
+// 统一输入弹窗（右键菜单/配置多处复用）
+function promptInput(message: string, title: string, inputValue: string, validator?: (v: string) => boolean | string) {
+  return ElMessageBox.prompt(message, title, {
+    inputValue,
+    confirmButtonText: "保存",
+    cancelButtonText: "取消",
+    inputValidator: validator as any,
+  });
+}
 // 右键非目标区域（空白/其它元素）时关闭菜单；可右键目标自行 stopPropagation 处理
 function onDocCtx(e: MouseEvent) {
   const t = e.target as HTMLElement | null;
@@ -437,12 +449,7 @@ async function ctxRename() {
   if (t.type === "folder") {
     // 文件夹重命名（含子树路径迁移）
     try {
-      const { value } = await ElMessageBox.prompt("新的文件夹名", "重命名文件夹", {
-        inputValue: t.name,
-        confirmButtonText: "保存",
-        cancelButtonText: "取消",
-        inputValidator: (v: string) => (v.trim() ? true : "名称不能为空"),
-      });
+      const { value } = await promptInput("新的文件夹名", "重命名文件夹", t.name, (v: string) => (v.trim() ? true : "名称不能为空"));
       await api.post("/bookmarks/rename-folder", { oldPath: t.path, newName: value.trim() });
       ElMessage.success("文件夹已重命名");
       await loadBookmarks();
@@ -452,12 +459,7 @@ async function ctxRename() {
     return;
   }
   try {
-    const { value } = await ElMessageBox.prompt("新的名称", t.type === "service" ? "重命名服务" : "重命名", {
-      inputValue: t.name,
-      confirmButtonText: "保存",
-      cancelButtonText: "取消",
-      inputValidator: (v: string) => (v.trim() ? true : "名称不能为空"),
-    });
+    const { value } = await promptInput("新的名称", t.type === "service" ? "重命名服务" : "重命名", t.name, (v: string) => (v.trim() ? true : "名称不能为空"));
     if (t.type === "service") {
       await api.put(`/admin/services/${t.id}`, { name: value.trim() });
       t.svc.name = value.trim();
@@ -476,11 +478,7 @@ async function ctxEditDesc() {
   closeCtx(); // 先关右键菜单，再弹输入框
   if (!t || t.type !== "service") return;
   try {
-    const { value } = await ElMessageBox.prompt("服务描述（显示在卡片上）", "编辑描述", {
-      inputValue: t.svc.description || "",
-      confirmButtonText: "保存",
-      cancelButtonText: "取消",
-    });
+    const { value } = await promptInput("服务描述（显示在卡片上）", "编辑描述", t.svc.description || "");
     await api.put(`/admin/services/${t.id}`, { description: value.trim() });
     t.svc.description = value.trim();
     ElMessage.success("已保存描述");
@@ -492,12 +490,7 @@ async function ctxEditUrl() {
   const t = ctxMenu.value?.target;
   closeCtx(); // 先关右键菜单，再弹输入框
   if (!t || t.type === "folder") return;  try {
-    const { value } = await ElMessageBox.prompt("新的网址（含 http(s)://）", "修改网址", {
-      inputValue: t.url,
-      confirmButtonText: "保存",
-      cancelButtonText: "取消",
-      inputValidator: (v: string) => (/^https?:\/\//i.test(v.trim()) ? true : "网址需以 http(s):// 开头"),
-    });
+    const { value } = await promptInput("新的网址（含 http(s)://）", "修改网址", t.url, (v: string) => (/^https?:\/\//i.test(v.trim()) ? true : "网址需以 http(s):// 开头"));
     if (t.type === "service") {
       await api.put(`/admin/services/${t.id}`, { url: value.trim() });
       t.svc.url = value.trim();
@@ -950,6 +943,8 @@ function onClickOutside(e: MouseEvent) {
   display: flex;
   gap: 10px;
 }
+
+
 .icon-btn {
   width: 38px;
   height: 38px;
@@ -1031,8 +1026,18 @@ function onClickOutside(e: MouseEvent) {
 .hero {
   position: relative;
   z-index: 1;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 24px;
   padding: 40px 20px 30px;
+}
+.hero-spacer {
+  width: 220px;
+  flex-shrink: 0;
+}
+.hero-center {
+  text-align: center;
 }
 .greeting {
   font-size: 20px;
@@ -1488,6 +1493,12 @@ function onClickOutside(e: MouseEvent) {
   }
   .hero {
     padding: 24px 12px 20px;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+  .hero-spacer {
+    display: none;
   }
   .content {
     padding: 0 14px 40px;
