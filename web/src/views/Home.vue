@@ -56,7 +56,6 @@
 
     <!-- 时钟区 -->
     <section class="hero">
-      <div class="hero-spacer"></div>
       <div class="hero-center">
         <div class="greeting">{{ greeting }}，{{ nowDate }}</div>
         <Vue3FlipClock />
@@ -1026,15 +1025,8 @@ function onClickOutside(e: MouseEvent) {
 .hero {
   position: relative;
   z-index: 1;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  gap: 24px;
+  text-align: center;
   padding: 40px 20px 30px;
-}
-.hero-spacer {
-  width: 220px;
-  flex-shrink: 0;
 }
 .hero-center {
   text-align: center;

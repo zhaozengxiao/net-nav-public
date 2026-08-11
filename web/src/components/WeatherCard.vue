@@ -120,8 +120,10 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
 <style scoped>
 /* 天气大卡片（时钟右侧，背景随天气变化） */
 .weather-card {
+  position: absolute; /* 固定在 hero 右侧，不参与布局（不挤压搜索区） */
+  right: 24px;
+  top: 40px;
   width: 240px;
-  flex-shrink: 0;
   padding: 14px 18px 16px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.2);
@@ -131,7 +133,6 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   transition: all 0.25s;
   user-select: none;
   overflow: hidden;
-  position: relative;
 }
 .weather-card:hover {
   transform: translateY(-4px);
@@ -262,9 +263,10 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
 
 @media (max-width: 768px) {
   .weather-card {
+    position: static; /* 窄屏回到文档流，居中堆叠 */
     width: auto;
     max-width: 300px;
-    flex-shrink: 1;
+    margin: 0 auto;
   }
 }
 </style>
