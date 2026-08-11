@@ -2,9 +2,9 @@
 # 镜像地址: ghcr.io/zhaozengxiao/net-nav-public
 name: build-and-push-image
 
+# 仅打版本标签时构建一次（避免 push main + push tag 重复构建）
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
