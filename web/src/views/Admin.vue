@@ -61,10 +61,10 @@
       <!-- ===== 服务管理 ===== -->
       <el-tab-pane label="服务管理" name="services">
         <div class="toolbar">
-          <el-button type="primary" @click="openService()">➕ 新增服务</el-button>
-          <el-button type="success" plain @click="openScan()">🔍 自动发现</el-button>
-          <el-button plain @click="openDockerCfg()">🐳 Docker 设置</el-button>
-          <el-button plain @click="openMonCfg()">⏱️ 检测设置</el-button>
+          <el-button type="primary" @click="openSvcForm()">➕ 新增服务</el-button>
+          <el-button type="success" plain @click="scanDlg = true">🔍 自动发现</el-button>
+          <el-button plain @click="dockerCfgDlg = true">🐳 Docker 设置</el-button>
+          <el-button plain @click="monCfgDlg = true">⏱️ 检测设置</el-button>
           <el-button plain :loading="dockerChecking" @click="refreshDocker">🔄 刷新 Docker 检测</el-button>
           <el-button plain @click="exportServices">📤 导出</el-button>
           <el-button plain @click="svcImportInput?.click()">📥 导入</el-button>
@@ -118,7 +118,7 @@
             </el-table-column>
             <el-table-column label="操作" width="160">
               <template #default="{ row }">
-                <el-button size="small" @click="openService(row)">编辑</el-button>
+                <el-button size="small" @click="openSvcForm(row)">编辑</el-button>
                 <el-button size="small" type="danger" plain @click="removeService(row)">删除</el-button>
               </template>
             </el-table-column>
@@ -149,7 +149,7 @@
               <div class="m-tags">🔥 {{ s.clicks }} 次点击</div>
             </div>
             <div class="m-actions">
-              <el-button size="small" circle @click="openService(s)"><el-icon><Edit /></el-icon></el-button>
+              <el-button size="small" circle @click="openSvcForm(s)"><el-icon><Edit /></el-icon></el-button>
               <el-button size="small" circle type="danger" @click="removeService(s)"><el-icon><Delete /></el-icon></el-button>
             </div>
           </div>
@@ -241,121 +241,23 @@
       </template>
     </el-dialog>
 
-    <!-- 自动发现对话框 -->
-    <el-dialog v-model="scanDlg" title="🔍 自动发现内网服务" :width="'min(640px, 96vw)'">
-      <div class="scan-form">
-        <el-input v-model="scanForm.network" placeholder="网段，如 192.168.1.0/24" style="flex: 1">
-          <template #prepend>网段</template>
-        </el-input>
-        <el-select v-model="scanForm.mode" style="width: 110px">
-          <el-option label="快速" value="fast" />
-          <el-option label="完整" value="full" />
-        </el-select>
-        <el-button type="primary" :loading="scanning" @click="startScan">开始扫描</el-button>
-      </div>
-      <div v-if="scanning" class="scan-tip">正在扫描 {{ scanForm.network }}… 约需 10-40 秒</div>
-
-      <div v-if="scanResults.length" class="scan-results">
-        <div class="scan-summary">发现 {{ scanResults.length }} 个服务，耗时 {{ scanElapsed }}s</div>
-        <el-table :data="scanResults" size="small" max-height="300" @selection-change="(rows) => (scanSelected = rows)">
-          <el-table-column type="selection" width="40" />
-          <el-table-column prop="ip" label="IP" width="130" />
-          <el-table-column prop="port" label="端口" width="70" />
-          <el-table-column prop="name" label="类型" width="110" />
-          <el-table-column prop="title" label="页面标题（识别到的服务）" show-overflow-tooltip />
-        </el-table>
-        <div class="scan-actions">
-          <el-button type="primary" :disabled="!scanSelected.length" @click="addSelected">
-            ➕ 添加所选 {{ scanSelected.length }} 个服务
-          </el-button>
-          <el-button @click="scanResults = []">清空结果</el-button>
-        </div>
-      </div>
-      <div v-if="scanError" class="scan-error">{{ scanError }}</div>
-    </el-dialog>
-
-    <!-- 检测设置对话框 -->
-    <el-dialog v-model="monCfgDlg" title="⏱️ 检测设置" :width="'min(420px, 94vw)'">
-      <el-form label-width="110px" @submit.prevent>
-        <el-form-item label="Ping 间隔">
-          <el-input-number v-model="monCfg.pingInterval" :min="5" :max="3600" />
-          <span class="cfg-unit">秒</span>
-          <div class="cfg-tip">服务在线状态探测间隔（默认 60 秒，最小 5 秒）</div>
-        </el-form-item>
-        <el-form-item label="Docker 间隔">
-          <el-input-number v-model="monCfg.dockerInterval" :min="1" :max="168" />
-          <span class="cfg-unit">小时</span>
-          <div class="cfg-tip">容器镜像更新检测间隔（默认 6 小时）</div>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="monCfgDlg = false">取消</el-button>
-        <el-button type="primary" @click="saveMonCfg">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Docker SSH 设置对话框 -->
-    <el-dialog v-model="dockerCfgDlg" title="🐳 Docker 服务器设置" :width="'min(420px, 94vw)'">
-      <el-form label-width="70px" @submit.prevent>
-        <el-form-item label="主机"><el-input v-model="dockerCfg.host" placeholder="如 192.168.50.242" /></el-form-item>
-        <el-form-item label="端口"><el-input-number v-model="dockerCfg.port" :min="1" :max="65535" /></el-form-item>
-        <el-form-item label="用户名"><el-input v-model="dockerCfg.user" placeholder="SSH 用户名" /></el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="dockerCfg.pass" type="password" show-password placeholder="SSH 密码（内网明文保存）" />
-        </el-form-item>
-      </el-form>
-      <div class="scan-tip">保存后自动检测所有已配置容器的服务镜像是否有更新</div>
-      <template #footer>
-        <el-button @click="dockerCfgDlg = false">取消</el-button>
-        <el-button type="primary" @click="saveDockerCfg">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 服务对话框 -->
-    <el-dialog v-model="svcDlg" :title="svcForm.id ? '编辑服务' : '新增服务'" :width="'min(480px, 94vw)'">
-      <el-form label-width="70px" @submit.prevent>
-        <el-form-item label="名称"><el-input v-model="svcForm.name" placeholder="如：GitLab" /></el-form-item>
-        <el-form-item label="地址"><el-input v-model="svcForm.url" placeholder="http://192.168.1.10" /></el-form-item>
-        <el-form-item label="分组">
-          <el-select v-model="svcForm.group_id" placeholder="选择分组" style="width: 100%">
-            <el-option v-for="g in groups" :key="g.id" :label="g.icon + ' ' + g.name" :value="g.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="描述"><el-input v-model="svcForm.description" placeholder="选填" /></el-form-item>
-        <el-form-item label="图标"><el-input v-model="svcForm.icon" placeholder="🔗" maxlength="4" /></el-form-item>
-        <el-form-item label="颜色">
-          <div class="colors">
-            <span
-              v-for="c in colors"
-              :key="c"
-              class="color-dot"
-              :style="{ background: c }"
-              :class="{ active: svcForm.color === c }"
-              @click="svcForm.color = c"
-            ></span>
-          </div>
-        </el-form-item>
-        <el-form-item label="排序"><el-input-number v-model="svcForm.sort" :min="0" :max="999" /></el-form-item>
-        <el-form-item label="容器名">
-          <el-input v-model="svcForm.docker_container" placeholder="Docker 容器名，如 new-api（留空不检测）" />
-        </el-form-item>
-        <el-form-item label="镜像">
-          <el-input v-model="svcForm.docker_image" placeholder="镜像名:tag，如 calciumion/new-api:latest" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="svcDlg = false">取消</el-button>
-        <el-button type="primary" @click="saveService">保存</el-button>
-      </template>
-    </el-dialog>
+    <!-- 弹窗子组件：服务表单 / 自动发现 / Docker 设置 / 检测设置 -->
+    <ServiceFormDlg v-model="svcDlg" :row="editingSvc" :groups="groups" @saved="loadAll" />
+    <ScanDlg v-model="scanDlg" @added="loadAll" />
+    <DockerCfgDlg v-model="dockerCfgDlg" @saved="loadAll" />
+    <MonCfgDlg v-model="monCfgDlg" @saved="loadAll" />
   </div>
-</template>
+</template>>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Edit, Delete } from "@element-plus/icons-vue";
 import Sortable from "sortablejs";
+import ServiceFormDlg from "../components/ServiceFormDlg.vue";
+import ScanDlg from "../components/ScanDlg.vue";
+import DockerCfgDlg from "../components/DockerCfgDlg.vue";
+import MonCfgDlg from "../components/MonCfgDlg.vue";
 import api from "../api";
 
 const colors = ["#38bdf8", "#a78bfa", "#f97316", "#22c55e", "#eab308", "#f43f5e", "#06b6d4", "#ec4899"];
@@ -368,8 +270,16 @@ const isMobile = ref(false);
 const services = ref<any[]>([]);
 
 const svcDlg = ref(false);
-const svcForm = ref<any>({ name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: 0 });
+const editingSvc = ref<any>(null);
+const scanDlg = ref(false);
+const dockerCfgDlg = ref(false);
+const monCfgDlg = ref(false);
 const groups = ref<any[]>([]);
+
+function openSvcForm(row?: any) {
+  editingSvc.value = row || null;
+  svcDlg.value = true;
+}
 
 // ---- 分组管理（一级 tab，UI 仿服务管理：表格/移动卡片，拖拽排序） ----
 const newGroupName = ref("");
@@ -477,45 +387,6 @@ async function deleteGroup(g: any) {
 }
 
 // ---- Docker 设置 ----
-const dockerCfgDlg = ref(false);
-const dockerCfg = ref({ host: "", port: 22, user: "", pass: "" });
-const dockerChecking = ref(false);
-
-// ---- 检测设置 ----
-const monCfgDlg = ref(false);
-const monCfg = ref({ pingInterval: 60, dockerInterval: 6 });
-
-function openMonCfg() {
-  api.get("/admin/monitor-config").then((r) => {
-    monCfg.value = r;
-    monCfgDlg.value = true;
-  }).catch((e) => handleErr(e));
-}
-async function saveMonCfg() {
-  try {
-    await api.put("/admin/monitor-config", monCfg.value);
-    ElMessage.success("已保存，检测间隔已生效");
-    monCfgDlg.value = false;
-  } catch (e) {
-    handleErr(e);
-  }
-}
-
-function openDockerCfg() {
-  api.get("/admin/docker-config").then((r) => {
-    dockerCfg.value = r;
-    dockerCfgDlg.value = true;
-  }).catch((e) => handleErr(e));
-}
-async function saveDockerCfg() {
-  try {
-    await api.put("/admin/docker-config", dockerCfg.value);
-    ElMessage.success("已保存，开始检测容器更新");
-    dockerCfgDlg.value = false;
-  } catch (e) {
-    handleErr(e);
-  }
-}
 async function refreshDocker() {
   dockerChecking.value = true;
   try {
@@ -527,71 +398,6 @@ async function refreshDocker() {
   } finally {
     dockerChecking.value = false;
   }
-}
-
-// ---- 自动发现 ----
-const scanDlg = ref(false);
-const scanForm = ref({ network: "", mode: "fast" });
-const scanning = ref(false);
-const scanResults = ref<any[]>([]);
-const scanSelected = ref<any[]>([]);
-const scanElapsed = ref(0);
-const scanError = ref("");
-
-function openScan() {
-  scanError.value = "";
-  // 根据当前访问地址自动推导网段
-  if (!scanForm.value.network) {
-    const h = location.hostname;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) {
-      const p = h.split(".");
-      scanForm.value.network = `${p[0]}.${p[1]}.${p[2]}.0/24`;
-    } else {
-      scanForm.value.network = "192.168.1.0/24";
-    }
-  }
-  scanDlg.value = true;
-}
-
-async function startScan() {
-  if (!scanForm.value.network) return ElMessage.warning("请输入网段");
-  scanning.value = true;
-  scanError.value = "";
-  scanResults.value = [];
-  scanSelected.value = [];
-  try {
-    const data = await api.post("/admin/scan", scanForm.value);
-    scanResults.value = data.found;
-    scanElapsed.value = Math.round(data.elapsed / 1000);
-    if (!data.found.length) ElMessage.info("未发现在线服务");
-  } catch (e: any) {
-    scanError.value = e.response?.data?.error || "扫描失败";
-  } finally {
-    scanning.value = false;
-  }
-}
-
-async function addSelected() {
-  if (!scanSelected.value.length) return;
-  let ok = 0;
-  for (const s of scanSelected.value) {
-    try {
-      const scheme = [443, 8443].includes(s.port) ? "https" : "http";
-      const name = s.title ? `${s.title}` : `${s.name} ${s.ip}`;
-      await api.post("/admin/services", {
-        name: name.slice(0, 20),
-        url: `${scheme}://${s.ip}:${s.port}`,
-        description: `${s.ip}:${s.port}`, // 保留原始地址信息
-      });
-      ok++;
-    } catch {
-      /* 单条失败继续 */
-    }
-  }
-  ElMessage.success(`已添加 ${ok} 个服务`);
-  scanDlg.value = false;
-  scanResults.value = [];
-  loadAll();
 }
 
 function updateViewport() {
@@ -1225,28 +1031,7 @@ function dockerText(s: any) {
 }
 
 // ---- 服务 ----
-function openService(row?: any) {
-  svcForm.value = row
-    ? { ...row }
-    : { name: "", url: "", description: "", icon: "🔗", color: "#38bdf8", sort: 0, docker_container: "", docker_image: "", group_id: groups.value[0]?.id || 0 };
-  svcDlg.value = true;
-}
-async function saveService() {
-  if (!svcForm.value.name || !svcForm.value.url) return ElMessage.warning("名称和地址必填");
-  try {
-    if (svcForm.value.id) {
-      await api.put(`/admin/services/${svcForm.value.id}`, svcForm.value);
-      ElMessage.success("已更新");
-    } else {
-      await api.post("/admin/services", svcForm.value);
-      ElMessage.success("已创建");
-    }
-    svcDlg.value = false;
-    loadAll();
-  } catch (e) {
-    handleErr(e);
-  }
-}
+// 服务表单弹窗（子组件 ServiceFormDlg 保存成功后 loadAll 刷新）
 async function removeService(row: any) {
   try {
     await ElMessageBox.confirm(`确定删除服务「${row.name}」？`, "提示", { type: "warning" });
