@@ -43,7 +43,7 @@ app.get("/api/weather", async (req, res) => {
     const wD = await wR.json();
     if (nowD.code !== 0 || wD.code !== 0) return res.status(502).json({ ok: false, error: "城市站号无效" });
     const now = nowD.data.now;
-    const daily = (wD.data.daily || []).slice(0, 3); // 取前 3 天
+    const daily = (wD.data.daily || []).slice(0, 7); // 取 7 天预报
     const data = {
       city: nowD.data.location.name,
       path: nowD.data.location.path,
@@ -55,13 +55,14 @@ app.get("/api/weather", async (req, res) => {
       windDirection: now.windDirection,
       precipitation: now.precipitation,
       lastUpdate: nowD.data.lastUpdate,
-      // 3 天预报
+      // 7 天预报
       forecast: daily.map(day => ({
         date: day.date.slice(5), // MM/DD
         high: day.high,
         low: day.low,
         dayText: day.dayText,
         dayCode: day.dayCode,
+        dayWindScale: day.dayWindScale || "",
       })),
     };
     weatherCache = { key: city, data, at: Date.now() };

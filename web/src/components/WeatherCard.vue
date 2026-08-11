@@ -17,12 +17,13 @@
       <span class="w-meta-item">🌬️ {{ weather.windDirection }}{{ weather.windScale }}</span>
       <span class="w-meta-item">🌡️ 体感 {{ Math.round(weather.feelst) }}°</span>
     </div>
-    <!-- 3 天预报 -->
+    <!-- 7 天预报 -->
     <div v-if="weather.forecast?.length" class="w-forecast">
       <div v-for="(d, i) in weather.forecast" :key="d.date" class="w-day">
         <span class="w-day-date">{{ wDayName(i) }}</span>
-        <span class="w-day-icon"><WIcon :code="d.dayCode" :size="24" /></span>
+        <span class="w-day-icon"><WIcon :code="d.dayCode" :size="16" /></span>
         <span class="w-day-temp">{{ Math.round(d.high) }}/{{ Math.round(d.low) }}°</span>
+        <span class="w-day-wind">{{ d.dayWindScale }}</span>
       </div>
     </div>
   </div>
@@ -38,7 +39,7 @@ import api from "../api";
 import WIcon from "./WIcon.vue";
 
 // 天气（中央气象台，时钟右侧）
-const weather = ref<{ icon: string; temperature: number; city: string; humidity: number; windScale: string; windDirection: string; feelst: number; precipitation: number; lastUpdate?: string; forecast?: { date: string; high: number; low: number; dayText: string; dayCode: number }[] } | null>(null);
+const weather = ref<{ icon: string; temperature: number; city: string; humidity: number; windScale: string; windDirection: string; feelst: number; precipitation: number; lastUpdate?: string; forecast?: { date: string; high: number; low: number; dayText: string; dayCode: number; dayWindScale?: string }[] } | null>(null);
 let weatherTimer: number | undefined;
 
 function weatherIcon(w: any) {
@@ -63,7 +64,8 @@ function wDayName(i: number) {
   if (i === 0) return "今天";
   if (i === 1) return "明天";
   if (i === 2) return "后天";
-  return "";
+  const d = new Date(Date.now() + i * 86400000);
+  return ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
 }
 const weatherTip = computed(() => {
   if (!weather.value) return "天气加载中";
@@ -119,57 +121,12 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
 .weather-card {
   position: absolute; /* 固定在 hero 右侧，不参与布局 */
   right: 24px;
-  top: 0;
-  width: 320px;
-  padding: 18px 22px 20px;
-  border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  top: 30px;
+  width: 375px;
+  padding: 12px 16px 10px;
   cursor: pointer;
-  transition: all 0.25s;
   user-select: none;
-  overflow: hidden;
-}
-.weather-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-/* 装饰光斑（右上 + 左下） */
-.weather-card::before,
-.weather-card::after {
-  content: "";
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-}
-.weather-card::before {
-  width: 150px;
-  height: 150px;
-  top: -50px;
-  right: -40px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.2), transparent 70%);
-}
-.weather-card::after {
-  width: 110px;
-  height: 110px;
-  bottom: -40px;
-  left: -30px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.1), transparent 70%);
-}
-
-/* 天气背景渐变：晴 / 云 / 雨 / 雪 */
-.weather-card.w-sun {
-  background: linear-gradient(160deg, rgba(56, 140, 255, 0.42), rgba(30, 60, 120, 0.3));
-}
-.weather-card.w-cloud {
-  background: linear-gradient(160deg, rgba(80, 95, 130, 0.48), rgba(40, 50, 75, 0.3));
-}
-.weather-card.w-rain {
-  background: linear-gradient(160deg, rgba(50, 70, 110, 0.58), rgba(25, 35, 60, 0.35));
-}
-.weather-card.w-snow {
-  background: linear-gradient(160deg, rgba(110, 140, 170, 0.48), rgba(60, 80, 105, 0.3));
+  text-align: left;
 }
 
 /* 头部：城市 + 更新时间 */
@@ -177,9 +134,7 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 4px;
 }
 .w-city {
   font-size: 16px;
@@ -198,10 +153,10 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .w-icon {
-  font-size: 54px;
+  font-size: 50px;
   animation: w-float 3s ease-in-out infinite;
 }
 /* 图标按天气色调发光 */
@@ -219,7 +174,7 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   gap: 3px;
 }
 .w-temp {
-  font-size: 48px;
+  font-size: 46px;
   font-weight: 800;
   line-height: 1;
   background: linear-gradient(180deg, #ffffff, rgba(255, 255, 255, 0.72));
@@ -239,42 +194,43 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 .w-meta-item {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.88);
-  background: rgba(255, 255, 255, 0.09);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  padding: 4px 10px;
-  border-radius: 999px;
-  backdrop-filter: blur(4px);
+  color: var(--text-dim);
 }
 
-/* 3 天预报 */
+/* 7 天预报（窄卡片横向滚动） */
 .w-forecast {
   display: flex;
   gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-bottom: 4px;
+}
+.w-forecast::-webkit-scrollbar {
+  height: 4px;
+}
+.w-forecast::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
 }
 .w-day {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   flex: 1;
-  padding: 10px 4px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  transition: all 0.2s;
+  padding: 6px 3px;
+  border-radius: 10px;
+  transition: background 0.15s;
 }
 .w-day:hover {
-  background: rgba(255, 255, 255, 0.13);
-  transform: translateY(-3px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  background: rgba(148, 163, 184, 0.08);
 }
 .w-day-date {
   font-size: 12px;
@@ -285,8 +241,14 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   font-size: 24px;
 }
 .w-day-temp {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+}
+.w-day-wind {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
 }
 
 /* 加载态 */
@@ -295,21 +257,29 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--text-dim);
   width: auto;
-  background: linear-gradient(160deg, rgba(30, 41, 66, 0.55), rgba(15, 23, 42, 0.35));
 }
 .weather-card.weather-loading .w-icon {
   font-size: 24px;
   filter: none;
 }
 
+@media (max-width: 1400px) {
+  .weather-card {
+    display: none; /* 窄屏隐藏天气，避免遮挡 */
+  }
+}
+
 @media (max-width: 768px) {
   .weather-card {
     position: static; /* 窄屏回到文档流，居中堆叠 */
     width: auto;
-    max-width: 320px;
+    max-width: 340px;
     margin: 0 auto;
+  }
+  .w-forecast {
+    overflow-x: auto; /* 窄屏预报横向滚动 */
   }
 }
 </style>
