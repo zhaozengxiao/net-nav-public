@@ -1097,7 +1097,7 @@ function onClickOutside(e: MouseEvent) {
 /* 搜索框 */
 .search-box {
   max-width: 560px;
-  margin: 30px auto 0;
+  margin: 0 auto 0;
   display: flex;
   align-items: center;
   gap: 10px;

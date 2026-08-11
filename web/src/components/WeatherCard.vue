@@ -119,7 +119,7 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
 .weather-card {
   position: absolute; /* 固定在 hero 右侧，不参与布局 */
   right: 24px;
-  top: 40px;
+  top: 0;
   width: 320px;
   padding: 18px 22px 20px;
   border-radius: 22px;
