@@ -123,8 +123,8 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   position: absolute; /* 固定在 hero 右侧，不参与布局（不挤压搜索区） */
   right: 24px;
   top: 40px;
-  width: 240px;
-  padding: 14px 18px 16px;
+  width: 320px;
+  padding: 16px 20px 18px;
   border-radius: 18px;
   border: 1px solid rgba(148, 163, 184, 0.2);
   backdrop-filter: blur(16px);
