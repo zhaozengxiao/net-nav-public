@@ -118,110 +118,152 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
 </script>
 
 <style scoped>
-/* 天气大卡片（时钟右侧，背景随天气变化） */
+/* ===== 天气卡片（hero 右侧悬浮卡片，玻璃拟态 + 装饰光效） ===== */
 .weather-card {
-  position: absolute; /* 固定在 hero 右侧，不参与布局（不挤压搜索区） */
+  position: absolute; /* 固定在 hero 右侧，不参与布局 */
   right: 24px;
   top: 40px;
   width: 320px;
-  padding: 16px 20px 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  padding: 18px 22px 20px;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   cursor: pointer;
   transition: all 0.25s;
   user-select: none;
   overflow: hidden;
+  position: relative;
 }
 .weather-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
-/* 天气背景渐变：晴 / 云 / 雨 / 雪 */
-.weather-card.w-sun {
-  background: linear-gradient(160deg, rgba(56, 140, 255, 0.35), rgba(30, 60, 120, 0.25));
+/* 装饰光斑（右上 + 左下） */
+.weather-card::before,
+.weather-card::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
 }
-.weather-card.w-cloud {
-  background: linear-gradient(160deg, rgba(80, 95, 130, 0.4), rgba(40, 50, 75, 0.25));
+.weather-card::before {
+  width: 150px;
+  height: 150px;
+  top: -50px;
+  right: -40px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.2), transparent 70%);
 }
-.weather-card.w-rain {
-  background: linear-gradient(160deg, rgba(50, 70, 110, 0.5), rgba(25, 35, 60, 0.3));
-}
-.weather-card.w-snow {
-  background: linear-gradient(160deg, rgba(110, 140, 170, 0.4), rgba(60, 80, 105, 0.25));
+.weather-card::after {
+  width: 110px;
+  height: 110px;
+  bottom: -40px;
+  left: -30px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.1), transparent 70%);
 }
 
+/* 天气背景渐变：晴 / 云 / 雨 / 雪 */
+.weather-card.w-sun {
+  background: linear-gradient(160deg, rgba(56, 140, 255, 0.42), rgba(30, 60, 120, 0.3));
+}
+.weather-card.w-cloud {
+  background: linear-gradient(160deg, rgba(80, 95, 130, 0.48), rgba(40, 50, 75, 0.3));
+}
+.weather-card.w-rain {
+  background: linear-gradient(160deg, rgba(50, 70, 110, 0.58), rgba(25, 35, 60, 0.35));
+}
+.weather-card.w-snow {
+  background: linear-gradient(160deg, rgba(110, 140, 170, 0.48), rgba(60, 80, 105, 0.3));
+}
+
+/* 头部：城市 + 更新时间 */
 .w-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 .w-city {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
-  color: var(--text);
+  color: #fff;
   letter-spacing: 0.5px;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
 }
 .w-update {
   font-size: 11px;
-  color: var(--text-dim);
+  color: rgba(255, 255, 255, 0.65);
 }
+
+/* 主区：大图标 + 温度 */
 .w-main {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 10px;
+  gap: 16px;
+  margin-bottom: 12px;
 }
+/* emoji 彩色渲染 */
 .w-icon,
 .w-day-icon {
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", "EmojiOne Color", sans-serif;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
 }
 .w-icon {
-  font-size: 48px;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.25));
+  font-size: 54px;
   animation: w-float 3s ease-in-out infinite;
 }
+/* 图标按天气色调发光 */
+.w-sun .w-icon { filter: drop-shadow(0 0 16px rgba(255, 200, 90, 0.55)); }
+.w-rain .w-icon { filter: drop-shadow(0 0 16px rgba(90, 170, 255, 0.5)); }
+.w-cloud .w-icon { filter: drop-shadow(0 0 16px rgba(170, 190, 225, 0.4)); }
+.w-snow .w-icon { filter: drop-shadow(0 0 16px rgba(205, 235, 255, 0.5)); }
 @keyframes w-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-4px);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 .w-now {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .w-temp {
-  font-size: 42px;
+  font-size: 48px;
   font-weight: 800;
-  color: var(--text);
   line-height: 1;
+  background: linear-gradient(180deg, #ffffff, rgba(255, 255, 255, 0.72));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.2);
 }
 .w-text {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 500;
 }
+
+/* 信息行：胶囊 chip */
 .w-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 8px 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
-  margin-bottom: 10px;
+  gap: 6px;
+  margin-bottom: 12px;
 }
 .w-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
-  color: var(--text-dim);
+  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 4px 10px;
+  border-radius: 999px;
+  backdrop-filter: blur(4px);
 }
 
-/* 预报行 */
+/* 3 天预报 */
 .w-forecast {
   display: flex;
   gap: 8px;
@@ -230,46 +272,52 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   flex: 1;
-  padding: 8px 4px;
-  border-radius: 10px;
-  transition: background 0.15s;
+  padding: 10px 4px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.2s;
 }
 .w-day:hover {
-  background: rgba(148, 163, 184, 0.1);
+  background: rgba(255, 255, 255, 0.13);
+  transform: translateY(-3px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
 }
 .w-day-date {
   font-size: 12px;
   font-weight: 600;
-  color: var(--text);
+  color: #fff;
 }
 .w-day-icon {
-  font-size: 22px;
+  font-size: 24px;
 }
 .w-day-temp {
   font-size: 12px;
-  color: var(--text-dim);
+  color: rgba(255, 255, 255, 0.8);
 }
 
+/* 加载态 */
 .weather-card.weather-loading {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--text-dim);
+  color: rgba(255, 255, 255, 0.75);
   width: auto;
   background: linear-gradient(160deg, rgba(30, 41, 66, 0.55), rgba(15, 23, 42, 0.35));
 }
 .weather-card.weather-loading .w-icon {
   font-size: 24px;
+  filter: none;
 }
 
 @media (max-width: 768px) {
   .weather-card {
     position: static; /* 窄屏回到文档流，居中堆叠 */
     width: auto;
-    max-width: 300px;
+    max-width: 320px;
     margin: 0 auto;
   }
 }
