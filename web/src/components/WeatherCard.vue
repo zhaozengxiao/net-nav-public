@@ -6,7 +6,7 @@
       <span class="w-update">{{ weather.lastUpdate?.slice(5) }}</span>
     </div>
     <div class="w-main">
-      <span class="w-icon">{{ wTodayIcon }}</span>
+      <WIcon :code="wTodayCode" :size="54" class="w-icon" />
       <div class="w-now">
         <div class="w-temp">{{ Math.round(weather.temperature) }}°</div>
         <div class="w-text">{{ wTodayText }}</div>
@@ -21,7 +21,7 @@
     <div v-if="weather.forecast?.length" class="w-forecast">
       <div v-for="(d, i) in weather.forecast" :key="d.date" class="w-day">
         <span class="w-day-date">{{ wDayName(i) }}</span>
-        <span class="w-day-icon">{{ weatherDayIcon(d.dayCode) }}</span>
+        <span class="w-day-icon"><WIcon :code="d.dayCode" :size="24" /></span>
         <span class="w-day-temp">{{ Math.round(d.high) }}/{{ Math.round(d.low) }}°</span>
       </div>
     </div>
@@ -35,6 +35,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import api from "../api";
+import WIcon from "./WIcon.vue";
 
 // 天气（中央气象台，时钟右侧）
 const weather = ref<{ icon: string; temperature: number; city: string; humidity: number; windScale: string; windDirection: string; feelst: number; precipitation: number; lastUpdate?: string; forecast?: { date: string; high: number; low: number; dayText: string; dayCode: number }[] } | null>(null);
@@ -48,12 +49,8 @@ function weatherIcon(w: any) {
   const h = new Date().getHours();
   return h >= 6 && h < 19 ? "🌤️" : "🌙";
 }
-function weatherDayIcon(code: number) {
-  const map: Record<number, string> = { 0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️", 4: "🌧️", 5: "⛈️", 6: "🌨️", 7: "🌫️", 8: "🌧️", 9: "⛈️", 10: "❄️", 11: "🌧️", 12: "⛈️" };
-  return map[code] || "🌤️";
-}
-// 今日天气（用预报首日，比规则更准）
-const wTodayIcon = computed(() => (weather.value?.forecast?.[0] ? weatherDayIcon(weather.value.forecast[0].dayCode) : weather.value?.icon || "🌤️"));
+// 今日天气 code（用预报首日）
+const wTodayCode = computed(() => weather.value?.forecast?.[0]?.dayCode ?? -1);
 const wTodayText = computed(() => weather.value?.forecast?.[0]?.dayText || "");
 const wBgClass = computed(() => {
   const code = weather.value?.forecast?.[0]?.dayCode ?? -1;
@@ -202,11 +199,6 @@ onBeforeUnmount(() => clearInterval(weatherTimer));
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;
-}
-/* emoji 彩色渲染 */
-.w-icon,
-.w-day-icon {
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
 }
 .w-icon {
   font-size: 54px;
