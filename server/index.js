@@ -7,6 +7,7 @@ const db = require("./db");
 const monitor = require("./monitor");
 const { scanNetwork } = require("./scan");
 const dockerCheck = require("./dockercheck");
+const UAParser = require("ua-parser-js");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 6666;
@@ -121,6 +122,38 @@ app.get("/api/events", (req, res) => {
   res.write(`event: snapshot\ndata: ${JSON.stringify(statusSnapshot())}\n\n`);
 
   req.on("close", () => clients.delete(res));
+});
+
+// ---------- 访问记录（设备/系统/浏览器统计） ----------
+app.post("/api/visit", (req, res) => {
+  const ua = req.headers["user-agent"] || "";
+  const p = new UAParser(ua).getResult();
+  const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket.remoteAddress || "";
+  db.prepare("INSERT INTO visits (ua, device, os, browser, ip) VALUES (?, ?, ?, ?, ?)").run(
+    ua.slice(0, 500),
+    p.device.type || "desktop", // mobile / tablet / desktop
+    p.os.name || "未知",
+    p.browser.name || "未知",
+    ip.slice(0, 64)
+  );
+  res.json({ ok: true });
+});
+
+app.get("/api/admin/visits", adminAuth, (req, res) => {
+  const byDevice = db.prepare("SELECT device AS name, COUNT(*) AS value FROM visits GROUP BY device ORDER BY value DESC").all();
+  const byOs = db.prepare("SELECT os AS name, COUNT(*) AS value FROM visits GROUP BY os ORDER BY value DESC").all();
+  const byBrowser = db.prepare("SELECT browser AS name, COUNT(*) AS value FROM visits GROUP BY browser ORDER BY value DESC").all();
+  const recent = db.prepare("SELECT * FROM visits ORDER BY id DESC LIMIT 50").all();
+  res.json({
+    total: db.prepare("SELECT COUNT(*) AS c FROM visits").get().c,
+    byDevice, byOs, byBrowser, recent,
+  });
+});
+
+// 清空访问记录
+app.post("/api/admin/visits/clear", adminAuth, (req, res) => {
+  db.prepare("DELETE FROM visits").run();
+  res.json({ ok: true });
 });
 
 // ---------- 管理认证（支持多会话，token 存列表互不踢） ----------

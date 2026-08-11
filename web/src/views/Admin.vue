@@ -204,6 +204,55 @@
           </div>
         </div>
       </el-tab-pane>
+
+      <!-- ===== 访问统计 ===== -->
+      <el-tab-pane label="访问统计" name="visits">
+        <div class="toolbar">
+          <el-button type="danger" plain :disabled="!visits.total" @click="clearVisits">🗑️ 清空记录</el-button>
+          <span class="bm-count">共 {{ visits.total }} 次访问</span>
+        </div>
+        <div class="visit-grid">
+          <div class="visit-card">
+            <div class="visit-title">📱 设备类型</div>
+            <div v-for="d in visits.byDevice" :key="d.name" class="visit-row">
+              <span class="v-name">{{ deviceName(d.name) }}</span>
+              <div class="v-bar"><div class="v-fill" :style="{ width: pct(d.value) }"></div></div>
+              <span class="v-val">{{ d.value }}</span>
+            </div>
+            <div v-if="!visits.byDevice.length" class="m-empty">暂无数据</div>
+          </div>
+          <div class="visit-card">
+            <div class="visit-title">💻 操作系统</div>
+            <div v-for="d in visits.byOs" :key="d.name" class="visit-row">
+              <span class="v-name">{{ d.name }}</span>
+              <div class="v-bar"><div class="v-fill" :style="{ width: pct(d.value) }"></div></div>
+              <span class="v-val">{{ d.value }}</span>
+            </div>
+            <div v-if="!visits.byOs.length" class="m-empty">暂无数据</div>
+          </div>
+          <div class="visit-card">
+            <div class="visit-title">🌐 浏览器</div>
+            <div v-for="d in visits.byBrowser" :key="d.name" class="visit-row">
+              <span class="v-name">{{ d.name }}</span>
+              <div class="v-bar"><div class="v-fill" :style="{ width: pct(d.value) }"></div></div>
+              <span class="v-val">{{ d.value }}</span>
+            </div>
+            <div v-if="!visits.byBrowser.length" class="m-empty">暂无数据</div>
+          </div>
+        </div>
+        <div class="table-wrap" style="margin-top: 16px">
+          <el-table :data="visits.recent" size="small" max-height="320">
+            <el-table-column prop="visited_at" label="时间" width="170" />
+            <el-table-column label="设备" width="80">
+              <template #default="{ row }">{{ deviceName(row.device) }}</template>
+            </el-table-column>
+            <el-table-column prop="os" label="系统" width="110" />
+            <el-table-column prop="browser" label="浏览器" width="130" />
+            <el-table-column prop="ip" label="IP" width="140" />
+            <el-table-column prop="ua" label="User-Agent" show-overflow-tooltip />
+          </el-table>
+        </div>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 编辑书签对话框 -->
@@ -334,8 +383,35 @@ async function saveGroupOrder() {
 function svcCountOf(gid: number) {
   return services.value.filter((s: any) => s.group_id === gid).length;
 }
+// ---- 访问统计 ----
+const visits = ref({ total: 0, byDevice: [], byOs: [], byBrowser: [], recent: [] });
+async function loadVisits() {
+  try {
+    visits.value = await api.get("/admin/visits");
+  } catch (e) {
+    handleErr(e);
+  }
+}
+function deviceName(d: string) {
+  return { mobile: "📱 手机", tablet: "📟 平板", desktop: "🖥️ 桌面" }[d] || d;
+}
+function pct(v: number) {
+  return visits.value.total ? Math.round((v / visits.value.total) * 100) + "%" : "0%";
+}
+async function clearVisits() {
+  try {
+    await ElMessageBox.confirm("确定清空全部访问记录？", "清空", { type: "warning" });
+    await api.post("/admin/visits/clear");
+    ElMessage.success("已清空");
+    loadVisits();
+  } catch {
+    /* 取消 */
+  }
+}
+
 watch(tab, (v) => {
   if (v === "groups") loadGroups();
+  if (v === "visits") loadVisits();
 });
 async function saveGroup() {
   const name = newGroupName.value.trim();
@@ -1067,6 +1143,52 @@ async function removeService(row: any) {
 /* 分组管理（UI 与服务管理一致，表格/移动卡片） */
 .g-table-wrap {
   margin-top: 4px;
+}
+
+/* 访问统计 */
+.visit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.visit-card {
+  padding: 14px 16px;
+  border: 1px solid var(--el-border-color-lighter, rgba(148, 163, 184, 0.2));
+  border-radius: 12px;
+}
+.visit-title {
+  font-weight: 600;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.visit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.v-name {
+  width: 80px;
+  flex-shrink: 0;
+}
+.v-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.15);
+  overflow: hidden;
+}
+.v-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+  transition: width 0.4s;
+}
+.v-val {
+  width: 40px;
+  text-align: right;
+  color: var(--el-text-color-secondary, #94a3b8);
 }
 .t-group {
   font-size: 12px;

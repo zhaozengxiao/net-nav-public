@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS bookmarks (
   sort INTEGER DEFAULT 0,
   path TEXT DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS visits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  visited_at TEXT DEFAULT (datetime('now','localtime')),
+  ua TEXT DEFAULT '',
+  device TEXT DEFAULT '',
+  os TEXT DEFAULT '',
+  browser TEXT DEFAULT '',
+  ip TEXT DEFAULT ''
+);
 `);
 
 // 迁移：旧库补列（docker_container 用于 Docker 镜像更新检测）

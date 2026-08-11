@@ -865,6 +865,8 @@ onMounted(() => {
   timer = window.setInterval(tick, 1000);
   load();
   loadBookmarks();
+  // 上报访问（设备/系统/浏览器统计，失败静默）
+  api.post("/visit").catch(() => {});
   connectSSE(); // 状态实时推送，无需轮询
   document.addEventListener("click", onClickOutside);
   document.addEventListener("contextmenu", onDocCtx);
