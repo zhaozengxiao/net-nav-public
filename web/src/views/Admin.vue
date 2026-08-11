@@ -387,6 +387,7 @@ async function deleteGroup(g: any) {
 }
 
 // ---- Docker 设置 ----
+const dockerChecking = ref(false);
 async function refreshDocker() {
   dockerChecking.value = true;
   try {
