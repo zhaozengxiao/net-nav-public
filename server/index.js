@@ -25,12 +25,20 @@ const GIT_COMMIT = (() => {
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 
-// 天气：代理中央气象台（免 key），10 分钟缓存，实时 + 3 天预报（两个接口合并）
-let weatherCache = { key: "", data: null, at: 0 };
+// 天气：代理中央气象台（免 key）。10 分钟缓存 + 失败兜底（stale） + 失败防抖 60s
+let weatherCache = { key: "", data: null, at: 0, failAt: 0 };
 app.get("/api/weather", async (req, res) => {
   const city = String(req.query.city || "").trim() || "54823"; // 默认济南
-  if (weatherCache.key === city && Date.now() - weatherCache.at < 600000) {
+  // 命中缓存直接返回
+  if (weatherCache.key === city && weatherCache.data && Date.now() - weatherCache.at < 600000) {
     return res.json({ ok: true, cached: true, ...weatherCache.data });
+  }
+  // 失败防抖：上次失败 60s 内不重试外网，直接返回缓存/错误
+  if (Date.now() - weatherCache.failAt < 60000) {
+    if (weatherCache.key === city && weatherCache.data) {
+      return res.json({ ok: true, cached: true, stale: true, ...weatherCache.data });
+    }
+    return res.status(502).json({ ok: false, error: "天气源暂时不可用，请稍后再试" });
   }
   try {
     const headers = { "User-Agent": "Mozilla/5.0" };
@@ -39,19 +47,26 @@ app.get("/api/weather", async (req, res) => {
       fetch(`https://weather.cma.cn/api/now/${city}`, { headers }),
       fetch(`https://weather.cma.cn/api/weather/${city}`, { headers }),
     ]);
-    if (!nowR.ok || !wR.ok) return res.status(502).json({ ok: false, error: `天气源 HTTP ${nowR.status}/${wR.status}` });
+    if (!nowR.ok || !wR.ok) throw new Error(`HTTP ${nowR.status}/${wR.status}`);
     const nowD = await nowR.json();
     const wD = await wR.json();
-    if (nowD.code !== 0 || wD.code !== 0) return res.status(502).json({ ok: false, error: "城市站号无效" });
+    if (nowD.code !== 0 || wD.code !== 0) throw new Error("城市站号无效");
     const now = nowD.data.now;
+    // 校验数据合理性：温度/湿度异常（如 999 占位）视为无效，避免缓存脏数据
+    const temp = Number(now.temperature);
+    const feelst = Number(now.feelst);
+    const humidity = Number(now.humidity);
+    if (!Number.isFinite(temp) || temp < -60 || temp > 60) throw new Error("温度数据异常");
+    if (!Number.isFinite(feelst) || feelst < -70 || feelst > 70) throw new Error("体感温度异常");
+    if (!Number.isFinite(humidity) || humidity < 0 || humidity > 100) throw new Error("湿度数据异常");
     const daily = (wD.data.daily || []).slice(0, 7); // 取 7 天预报
     const data = {
       city: nowD.data.location.name,
       path: nowD.data.location.path,
       // 实时
-      temperature: now.temperature,
-      feelst: now.feelst,
-      humidity: now.humidity,
+      temperature: temp,
+      feelst: feelst,
+      humidity: humidity,
       windScale: now.windScale,
       windDirection: now.windDirection,
       precipitation: now.precipitation,
@@ -66,9 +81,14 @@ app.get("/api/weather", async (req, res) => {
         dayWindScale: day.dayWindScale || "",
       })),
     };
-    weatherCache = { key: city, data, at: Date.now() };
+    weatherCache = { key: city, data, at: Date.now(), failAt: 0 };
     res.json({ ok: true, cached: false, ...data });
   } catch (e) {
+    // 失败：记 failAt，若有上次成功数据则兜底返回
+    weatherCache = { ...weatherCache, key: city, failAt: Date.now() };
+    if (weatherCache.data && weatherCache.key === city) {
+      return res.json({ ok: true, cached: true, stale: true, ...weatherCache.data });
+    }
     res.status(502).json({ ok: false, error: "天气获取失败（网络不通）" });
   }
 });

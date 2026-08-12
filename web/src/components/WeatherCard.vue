@@ -8,7 +8,7 @@
     <div class="w-main">
       <WIcon :code="wTodayCode" :size="54" class="w-icon" />
       <div class="w-now">
-        <div class="w-temp">{{ Math.round(weather.temperature) }}°</div>
+        <div class="w-temp">{{ wTempText }}</div>
         <div class="w-text">{{ wTodayText }}</div>
       </div>
     </div>
@@ -27,8 +27,9 @@
       </div>
     </div>
   </div>
-  <div v-else class="weather-card weather-loading" @click="configWeather">
-    <span class="w-icon">🌡️</span> 天气加载中…（点此配置城市）
+  <div v-else class="weather-card weather-loading" @click="weatherFailed ? retryWeather() : configWeather()">
+    <span class="w-icon">{{ weatherFailed ? "⚠️" : "🌡️" }}</span>
+    {{ weatherFailed ? "天气加载失败，点此重试" : "天气加载中…" }}
   </div>
 </template>
 
@@ -41,6 +42,7 @@ import WIcon from "./WIcon.vue";
 // 天气（中央气象台，时钟右侧）
 const weather = ref<{ icon: string; temperature: number; city: string; humidity: number; windScale: string; windDirection: string; feelst: number; precipitation: number; lastUpdate?: string; forecast?: { date: string; high: number; low: number; dayText: string; dayCode: number; dayWindScale?: string }[] } | null>(null);
 let weatherTimer: number | undefined;
+const weatherFailed = ref(false);
 
 function weatherIcon(w: any) {
   if (w.precipitation > 0) return "🌧️";
@@ -50,6 +52,11 @@ function weatherIcon(w: any) {
   const h = new Date().getHours();
   return h >= 6 && h < 19 ? "🌤️" : "🌙";
 }
+// 温度显示（异常值防御，如 999 占位）
+const wTempText = computed(() => {
+  const t = Number(weather.value?.temperature);
+  return Number.isFinite(t) && t >= -60 && t <= 60 ? `${Math.round(t)}°` : "--°";
+});
 // 今日天气 code（用预报首日）
 const wTodayCode = computed(() => weather.value?.forecast?.[0]?.dayCode ?? -1);
 const wTodayText = computed(() => weather.value?.forecast?.[0]?.dayText || "");
@@ -82,12 +89,18 @@ async function loadWeather() {
     const r: any = await api.get(`/weather?city=${city}`);
     if (r.ok) {
       weather.value = { ...r, icon: weatherIcon(r) };
-    } else if (r.error) {
-      weather.value = null;
+      weatherFailed.value = false;
+    } else {
+      weatherFailed.value = true;
+      if (!weather.value) weather.value = null;
     }
   } catch {
-    /* 天气不可达时静默 */
+    weatherFailed.value = true;
   }
+}
+function retryWeather() {
+  weatherFailed.value = false;
+  loadWeather();
 }
 async function configWeather() {
   try {
