@@ -5,22 +5,49 @@
       <span class="t-title">📶 实时网速</span>
     </div>
     <div class="t-main">
-      <div class="t-chart-wrap">
+      <div v-if="showChart" class="t-chart-wrap">
         <canvas ref="canvasRef" class="t-chart" />
+        <!-- 已配置但拉取失败：保留旧曲线 + 错误角标，避免图表闪断 -->
+        <div v-if="mode === 'error'" class="t-err-badge" :title="errMsg">⚠️ {{ errMsg }}</div>
+      </div>
+      <div v-else class="t-empty">
+        <template v-if="mode === 'empty'">
+          <div class="t-empty-icon">📡</div>
+          <div class="t-empty-msg">未配置爱快路由器</div>
+          <div class="t-empty-hint">后台 ⚙️ 配置后显示实时网速</div>
+        </template>
+        <template v-else-if="mode === 'error'">
+          <div class="t-empty-icon">⚠️</div>
+          <div class="t-empty-msg">网速获取失败</div>
+          <div class="t-empty-hint">{{ errMsg }}</div>
+        </template>
+        <template v-else>
+          <div class="t-empty-icon">⏳</div>
+          <div class="t-empty-msg">数据采集中…</div>
+        </template>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import api from "../api";
 import { fmtSpeed } from "../utils";
 import { trafficFilter } from "../composables/trafficFilter";
 
 const MAX_POINTS = 60;        // 最多保留 60 个点
-const POLL_INTERVAL = 1000;   // 1 秒轮询一次
 const CHART_WINDOW = 60000;   // 图表显示 60 秒窗口
+
+// 卡片三态：empty=未配置 / error=已配置但拉取失败 / ok=正常
+type Mode = "empty" | "error" | "ok";
+const mode = ref<Mode>("empty");
+const errMsg = ref("");
+// 是否渲染曲线（有 2+ 个点才画，否则显示占位提示）
+const showChart = ref(false);
+
+// 按状态自适应轮询间隔：正常 1s / 出错 5s / 未配置 10s（未配置时减少无谓请求）
+const POLL_MS: Record<Mode, number> = { ok: 1000, error: 5000, empty: 10000 };
 
 // 图表内边距
 const padL = 50;
@@ -33,7 +60,6 @@ interface SpeedPoint { up: number; down: number; t: number }
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const history: SpeedPoint[] = [];
 let animId = 0;
-let pollTimer: number | undefined;
 
 function getMaxRate(): number {
   // 只统计最近 1 分钟（CHART_WINDOW）内的数据，上升下降即时跟随
@@ -49,8 +75,10 @@ function getMaxRate(): number {
 
 function drawChart() {
   try {
+    // 无曲线可画时自停（由 watch(showChart) 重启），省掉空转的动画循环
+    if (!showChart.value) return;
     const canvas = canvasRef.value;
-    if (!canvas) { animId = requestAnimationFrame(drawChart); return; }
+    if (!canvas) { animId = requestAnimationFrame(drawChart); return; } // v-if 刚渲染，等 ref 就绪
     const ctx = canvas.getContext("2d");
     if (!ctx) { animId = requestAnimationFrame(drawChart); return; }
 
@@ -160,10 +188,20 @@ function drawChart() {
   }
 }
 
+// 递归 setTimeout 轮询：请求完成后才排下一轮（天然防重叠），并按状态调整间隔
+let pollTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleNext(delay: number) {
+  if (pollTimer) clearTimeout(pollTimer);
+  pollTimer = setTimeout(pollTraffic, delay);
+}
+
 async function pollTraffic() {
+  let delay = POLL_MS.ok;
   try {
     const r: any = await api.get("/traffic", { silent: true });
     if (r && typeof r.up === "number" && r.down >= 0) {
+      mode.value = "ok";
+      errMsg.value = "";
       // 首次拉取：若后端带了 history，用它填充初始曲线（打开页面即有最近 60 秒数据）
       if (!history.length && Array.isArray(r.history) && r.history.length) {
         for (const p of r.history) {
@@ -180,21 +218,45 @@ async function pollTraffic() {
       while (history.length > 0 && history[0].t < cutoff) {
         history.shift();
       }
+      // 有 2 个以上点才渲染曲线（少于 2 个画不出线，显示"数据采集中"）
+      if (history.length >= 2) showChart.value = true;
+    } else {
+      const err = (r && typeof r.error === "string" && r.error) || "暂无数据";
+      if (err === "未配置") {
+        // 未配置：占位提示，低频轮询以便配置后自动恢复
+        mode.value = "empty";
+        errMsg.value = "";
+        showChart.value = false;
+        delay = POLL_MS.empty;
+      } else {
+        // 已配置但拉取失败：无历史时显示错误占位；有历史则保留旧曲线 + 角标
+        mode.value = "error";
+        errMsg.value = err;
+        if (history.length < 2) showChart.value = false;
+        delay = POLL_MS.error;
+      }
     }
   } catch {
-    // ignore
+    // 后端不可达等网络异常：不切换状态，保持现状重试
   }
+  scheduleNext(delay);
 }
+
+// 曲线显示状态切换时启停动画循环
+watch(showChart, (v) => {
+  cancelAnimationFrame(animId);
+  if (v) animId = requestAnimationFrame(drawChart);
+});
 
 onMounted(() => {
   pollTraffic();
-  pollTimer = window.setInterval(pollTraffic, POLL_INTERVAL);
+  // 首次帧：若已有数据立即开画，否则自停等待 watch 重启
   animId = requestAnimationFrame(drawChart);
 });
 
 onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer);
-  if (animId) cancelAnimationFrame(animId);
+  if (pollTimer) clearTimeout(pollTimer);
+  cancelAnimationFrame(animId);
 });
 </script>
 
@@ -246,6 +308,50 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   opacity: 0.85;
+}
+
+/* 错误角标（有历史曲线时叠加在图表右上角） */
+.t-err-badge {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+  font-size: 10px;
+  color: #fbbf24;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 6px;
+  padding: 2px 6px;
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 占位状态（未配置 / 拉取失败 / 数据采集中） */
+.t-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 0 16px;
+  user-select: none;
+}
+.t-empty-icon {
+  font-size: 28px;
+  opacity: 0.8;
+}
+.t-empty-msg {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+}
+.t-empty-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 /* 小于 1400px 隐藏 */
