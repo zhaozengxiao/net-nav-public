@@ -81,3 +81,26 @@ async function save() {
   }
 }
 </script>
+
+<style scoped>
+.colors {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.color-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s;
+  border: 2px solid transparent;
+}
+.color-dot:hover {
+  transform: scale(1.15);
+}
+.color-dot.active {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.6);
+}
+</style>

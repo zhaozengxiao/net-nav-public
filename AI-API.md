@@ -5,9 +5,11 @@
 
 ---
 
-## 1. 认证（免密，两步）
+## 1. 认证（两步）
 
-内网自用，登录接口直接发放会话 token（无需密码）。**所有 `/api/admin/*` 写接口需带 `Authorization: Bearer <token>`**。
+内网自用，默认免密登录直接发放会话 token（无需密码）。**所有 `/api/admin/*` 写接口需带 `Authorization: Bearer <token>`**。
+
+> 可选加固：服务器设置环境变量 `ADMIN_PASSWORD` 后，登录需在 body 携带 `{ "password": "..." }`。
 
 ```bash
 HOST=http://192.168.50.203:6666
@@ -15,7 +17,8 @@ TOKEN=$(curl -s -X POST $HOST/api/admin/login -H 'Content-Type: application/json
 AUTH="Authorization: Bearer $TOKEN"
 ```
 
-> token 有效期：保留最近 10 个会话，过期返回 `401`，重新登录即可。
+> token 有效期：保留最近 10 个会话，过期返回 `401`，重新登录即可。登录接口同一 IP 每分钟限 10 次。
+> 注意：docker compose 部署时对外端口为 `8080`（6666 是 Chrome 不安全端口），HOST 按实际端口替换。
 
 ---
 
@@ -90,8 +93,14 @@ PUT /api/admin/services/reorder      # 需认证
 POST /api/admin/scan                 # 需认证
 { "network": "192.168.1.0/24", "mode": "fast" }
 ```
-响应：`{ "found": [{ "ip", "port", "title", "url" }], "elapsed": 1234 }`
-> `mode`: `fast`(常用端口) / `full`(全端口，慢)。扫描结果需前端手动导入，AI 可直接用返回的 `url`+`title` 调 3.3 新增。
+响应为 **NDJSON 流**（`application/x-ndjson`），每行一条消息，扫描过程中实时推送进度：
+```
+{"type":"progress","done":1234,"total":65280,"found":5}
+{"type":"done","found":[{"ip":"192.168.1.1","port":80,"name":"HTTP Web","title":"路由器管理"}],"elapsed":12345}
+```
+- `mode`: `fast`(常用端口) / `full`(全端口，慢)；网段仅支持 `/24` 与 `/16`（其他前缀返回 `{"type":"error",...}`）
+- 出错时最后一行：`{"type":"error","error":"..."}`
+- 发现项字段为 `{ ip, port, name, title }`，无 `url` 字段；调用方可自行拼接 `http(s)://ip:port`（端口 443/8443 用 https）后调 3.3 新增服务。
 
 ### 3.8 导出服务（JSON，含分组结构）
 ```bash

@@ -10,9 +10,11 @@ api.interceptors.request.use((config) => {
 });
 
 // 统一错误处理：401 提示重新登录，其他错误弹具体原因
+// 传 { silent: true } 的请求（如首页后台加载）不弹 toast，由调用方自行兜底
 api.interceptors.response.use(
   (res) => res.data,
   (err) => {
+    if (err.config?.silent) return Promise.reject(err);
     const status = err.response?.status;
     const msg = err.response?.data?.error;
     if (status === 401) {

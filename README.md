@@ -26,23 +26,24 @@ cd web && npm run build
 ```
 
 ## 一键拉取镜像（GHCR）
-镜像由 GitHub Actions 自动构建发布：`ghcr.io/zhaozengxiao/net-nav`（标签 `latest` + 提交短哈希 + `v*` 版本号）
+镜像由 GitHub Actions 自动构建发布：`ghcr.io/zhaozengxiao/net-nav-public`（标签 `latest` + 提交短哈希 + `v*` 版本号）
 
 ```bash
 # 方式一：docker run 一键启动（推荐映射 8080，避免 6666 被 Chrome 判定为不安全端口）
-docker pull ghcr.io/zhaozengxiao/net-nav:latest
+docker pull ghcr.io/zhaozengxiao/net-nav-public:latest
+mkdir -p data && chown -R 1000:1000 data   # 容器以非 root（node UID=1000）运行，数据目录需授权
 docker run -d --name net-nav \
   -p 8080:6666 \
   -v $(pwd)/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/zhaozengxiao/net-nav:latest
+  ghcr.io/zhaozengxiao/net-nav-public:latest
 # 访问 http://服务器IP:8080 ，后台 /admin
 
 # 方式二：docker compose
 cat > docker-compose.yml <<'YAML'
 services:
   net-nav:
-    image: ghcr.io/zhaozengxiao/net-nav:latest
+    image: ghcr.io/zhaozengxiao/net-nav-public:latest
     container_name: net-nav
     ports:
       - "8080:6666"
@@ -50,10 +51,12 @@ services:
     volumes:
       - ./data:/app/data
 YAML
+mkdir -p data && chown -R 1000:1000 data
 docker compose up -d
 ```
-- 更新镜像：`docker pull ghcr.io/zhaozengxiao/net-nav:latest && docker restart net-nav`
+- 更新镜像：`docker pull ghcr.io/zhaozengxiao/net-nav-public:latest && docker restart net-nav`
 - 数据在挂载卷 `./data`，升级不丢
+- 可选安全加固：设置环境变量 `ADMIN_PASSWORD` 后，后台登录需输入密码（不设置则保持免密，内网自用）
 
 ## Docker 部署（单端口 6666，含前端构建产物）
 ```bash
@@ -68,4 +71,4 @@ docker compose build --build-arg GIT_COMMIT=$(git rev-parse HEAD) && docker comp
 ## 配置
 - 服务数据存于 `server/nav.db`（首次运行自动建库）
 - 默认端口 6666 / 8888，可在 `server/index.js` 与 `web/vite.config.ts` 修改
-- 后台地址 `/admin`（免密，内网自用）
+- 后台地址 `/admin`（免密，内网自用；设置环境变量 `ADMIN_PASSWORD` 后需密码登录）

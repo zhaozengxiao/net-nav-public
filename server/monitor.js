@@ -36,12 +36,38 @@ function setOnChange(fn) {
 
 
 
+// 探测并发上限：避免服务多时一次全量探测打爆目标机/本机（socket 数）
+const CONCURRENCY = 20;
+
+let probing = false; // 重叠锁：上一轮未结束则跳过本轮（服务极多时探测耗时可能超过间隔）
+
 async function runProbe() {
+  if (probing) return [];
+  probing = true;
+  try {
+    return await doProbe();
+  } finally {
+    probing = false;
+  }
+}
+
+async function doProbe() {
   const services = db.prepare("SELECT id, url FROM services").all();
   if (services.length === 0) return [];
 
-  // 并行探测所有服务
-  const results = await Promise.allSettled(services.map((s) => probe(s.url)));
+  // 并发受限的探测（保持服务顺序与结果一一对应）
+  const results = new Array(services.length);
+  let idx = 0;
+  const worker = async () => {
+    while (idx < services.length) {
+      const i = idx++;
+      results[i] = await probe(services[i].url).then(
+        (v) => ({ status: "fulfilled", value: v }),
+        (e) => ({ status: "rejected", reason: e })
+      );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, services.length) }, worker));
 
   const changed = [];
   services.forEach((s, i) => {

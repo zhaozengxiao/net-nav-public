@@ -65,7 +65,7 @@ async function getTitle(ip, port) {
   }
 }
 
-// 解析网段（支持 /16 和 /24）
+// 解析网段（仅支持 /24 和 /16）
 function expandCidr(cidr) {
   const [ipPart, prefixStr] = cidr.split("/");
   const prefix = parseInt(prefixStr || "24", 10);
@@ -73,21 +73,23 @@ function expandCidr(cidr) {
   if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
     throw new Error("网段格式错误，示例：192.168.1.0/24");
   }
+  // 仅接受 /24 与 /16：其他前缀（如 /32、/27）与实现语义不符，明确拒绝避免误扫整个 /24
+  if (prefix !== 24 && prefix !== 16) {
+    throw new Error("仅支持 /24 与 /16 网段（/16 范围较大，建议用快速模式）");
+  }
   const ips = [];
-  if (prefix >= 24) {
+  if (prefix === 24) {
     for (let i = 1; i <= 254; i++) ips.push(`${parts[0]}.${parts[1]}.${parts[2]}.${i}`);
-  } else if (prefix >= 16) {
+  } else {
     for (let b = 0; b <= 255; b++) {
       if (b === 0 || b === 255) continue;
       for (let i = 1; i <= 254; i++) ips.push(`${parts[0]}.${parts[1]}.${b}.${i}`);
     }
-  } else {
-    throw new Error("暂不支持 /16 以下的网段（范围太大）");
   }
   return ips;
 }
 
-async function scanNetwork(network, mode = "fast", onProgress) {
+async function scanNetwork(network, mode = "fast", onProgress, signal) {
   const ports = PORT_SETS[mode] || PORT_SETS.fast;
   const ips = expandCidr(network);
   const found = [];
@@ -98,8 +100,10 @@ async function scanNetwork(network, mode = "fast", onProgress) {
 
   async function worker() {
     while (idx < ips.length) {
+      if (signal && signal.aborted) return; // 客户端断开：中止扫描
       const ip = ips[idx++];
       for (const port of ports) {
+        if (signal && signal.aborted) return;
         try {
           if (await checkPort(ip, port)) {
             let title = null;

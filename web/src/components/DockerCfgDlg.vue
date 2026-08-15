@@ -5,7 +5,12 @@
       <el-form-item label="端口"><el-input-number v-model="cfg.port" :min="1" :max="65535" /></el-form-item>
       <el-form-item label="用户名"><el-input v-model="cfg.user" placeholder="SSH 用户名" /></el-form-item>
       <el-form-item label="密码">
-        <el-input v-model="cfg.pass" type="password" show-password placeholder="SSH 密码（内网明文保存）" />
+        <el-input
+          v-model="cfg.pass"
+          type="password"
+          show-password
+          :placeholder="cfg.hasPass ? '已设置密码，留空保持不变' : 'SSH 密码'"
+        />
       </el-form-item>
     </el-form>
     <div class="scan-tip">保存后自动检测所有已配置容器的服务镜像是否有更新</div>
@@ -24,7 +29,7 @@ import api from "../api";
 const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void; (e: "saved"): void }>();
 
-const cfg = ref({ host: "", port: 22, user: "", pass: "" });
+const cfg = ref({ host: "", port: 22, user: "", pass: "", hasPass: false });
 
 watch(
   () => props.modelValue,
@@ -33,7 +38,8 @@ watch(
     api
       .get("/admin/docker-config")
       .then((r: any) => {
-        cfg.value = r;
+        // 密码不回传明文：已设置密码时显示空 + 提示占位，留空保存 = 保持不变
+        cfg.value = { ...r, pass: r.hasPass ? "" : r.pass || "", hasPass: !!r.hasPass };
       })
       .catch(() => ElMessage.error("加载配置失败"));
   }
@@ -50,3 +56,11 @@ async function save() {
   }
 }
 </script>
+
+<style scoped>
+.scan-tip {
+  color: #909399;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+</style>

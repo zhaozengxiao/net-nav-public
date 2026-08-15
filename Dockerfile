@@ -10,8 +10,12 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 
-# better-sqlite3 需 node-gyp 编译：装 Python + 编译工具
-RUN apk add --no-cache python3 make g++
+# better-sqlite3 v13 自带 linuxmusl 预编译二进制（prebuilds/ 随包分发，运行时按平台加载），
+# 无需 node-gyp 编译工具链（python3/make/g++ 不再需要）
+# 时区：容器日志/导出时间与本地（东八区）一致
+RUN apk add --no-cache tzdata \
+  && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+  && echo "Asia/Shanghai" > /etc/timezone
 
 COPY server/package*.json ./
 RUN npm ci --omit=dev
@@ -23,10 +27,18 @@ ARG GIT_COMMIT=unknown
 ENV GIT_COMMIT=$GIT_COMMIT
 
 ENV PORT=6666
+ENV NODE_ENV=production
+ENV TZ=Asia/Shanghai
 EXPOSE 6666
 
-# 数据目录挂载卷（数据库持久化）
-VOLUME ["/app/data"]
+# 数据目录：不声明 VOLUME（避免匿名卷"数据丢失"陷阱），挂载要求见 compose/README
+# 非 root 运行（安全基线）。注意：bind mount 的 ./data 需宿主机 chown 1000:1000 ./data，
+# 否则 node 用户无写权限、SQLite WAL 无法建库
+RUN mkdir -p /app/data && chown -R node:node /app
+USER node
 ENV DB_PATH=/app/data/nav.db
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:6666/api/services >/dev/null 2>&1 || exit 1
 
 CMD ["node", "index.js"]

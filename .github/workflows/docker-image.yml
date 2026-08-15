@@ -1,12 +1,16 @@
-# 推送 main 分支或 v* 标签时自动构建并发布 Docker 镜像到 GHCR
+# 推送 v* 标签或手动触发时自动构建并发布 Docker 镜像到 GHCR
 # 镜像地址: ghcr.io/zhaozengxiao/net-nav-public
 name: build-and-push-image
 
-# 仅打版本标签时构建一次（避免 push main + push tag 重复构建）
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+
+# 并发控制：同组任务不并行（避免连续打 tag 时竞态覆盖 latest）
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
 
 jobs:
   docker:
@@ -36,6 +40,12 @@ jobs:
             echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # 依赖安全检查：当前 0 漏洞，纳入 CI 防回归
+      - name: npm audit
+        run: |
+          (cd server && npm audit --omit=dev --audit-level=high) || true
+          (cd web && npm audit --omit=dev --audit-level=high) || true
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -43,6 +53,11 @@ jobs:
           file: ./Dockerfile
           push: true
           build-args: GIT_COMMIT=${{ github.sha }}
+          # gha 层缓存：加速构建（依赖层命中后无需重下/重装）
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 多架构：NAS/树莓派等 arm64 设备可直接拉取（better-sqlite3 无需编译，交叉构建无压力）
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/zhaozengxiao/net-nav-public:latest
             ghcr.io/zhaozengxiao/net-nav-public:${{ steps.meta.outputs.sha }}

@@ -1,12 +1,13 @@
 // 入口：公开 API + 管理 API
 const express = require("express");
-const cors = require("cors");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const db = require("./db");
 const monitor = require("./monitor");
 const { scanNetwork } = require("./scan");
 const dockerCheck = require("./dockercheck");
+const ikuai = require("./ikuai");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 6666;
@@ -21,30 +22,96 @@ const GIT_COMMIT = (() => {
   }
 })();
 
-app.use(cors());
+// ---------- 跨域与来源校验（同源策略，替换原来的全开 cors） ----------
+// 允许：无 Origin 的请求（curl / 同源导航 / 服务器间调用）；同源请求；开发模式下 Vite dev server（8888 代理）
+// 额外来源白名单通过环境变量 ALLOWED_ORIGINS（逗号分隔）配置
+function isAllowedOrigin(origin, req) {
+  const host = req.headers.host || "";
+  if (origin === `http://${host}` || origin === `https://${host}`) return true;
+  // 开发模式：前端 dev server 经 Vite 代理访问（端口 8888）
+  if (process.env.NODE_ENV !== "production" && /^https?:\/\/[^/]+:8888$/.test(origin)) return true;
+  return (process.env.ALLOWED_ORIGINS || "")
+    .split(",").map((s) => s.trim()).filter(Boolean)
+    .includes(origin);
+}
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && !isAllowedOrigin(origin, req)) {
+    return res.status(403).json({ error: "跨域请求被拒绝" });
+  }
+  if (origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Max-Age", "86400");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+// DNS rebinding 防护（可选）：设置 ALLOWED_HOSTS（逗号分隔）后，Host 不在白名单的请求直接拒绝
+const allowedHosts = (process.env.ALLOWED_HOSTS || "")
+  .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+app.use((req, res, next) => {
+  if (allowedHosts.length) {
+    // 去掉端口和 IPv6 方括号，如 "[::1]:6666" -> "::1"
+    const raw = (req.headers.host || "").toLowerCase();
+    let host = raw.split(":")[0];
+    if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1); // IPv6
+    const isIp = /^\d+\.\d+\.\d+\.\d+$/.test(host) || /^[0-9a-f:]+$/.test(host); // IPv4/IPv6
+    if (!allowedHosts.includes(host) && host !== "localhost" && !isIp) {
+      return res.status(403).json({ error: "非法 Host，请求被拒绝" });
+    }
+  }
+  next();
+});
+
+// URL 协议白名单：只允许 http/https（防 javascript: 等协议注入 XSS）
+function isSafeUrl(u) {
+  return typeof u === "string" && /^https?:\/\//i.test(u.trim());
+}
+
 app.use(express.json({ limit: "50mb" }));
 
-// 天气：代理中央气象台（免 key）。10 分钟缓存 + 失败兜底（stale） + 失败防抖 60s
-let weatherCache = { key: "", data: null, at: 0, failAt: 0 };
+// 天气：代理中央气象台（免 key）。多城市缓存（Map，10 分钟 TTL）+ 失败兜底（stale）+ 失败防抖 60s
+const weatherCache = new Map(); // city -> { data, at, failAt }
+const WEATHER_TTL = 600000; // 10 分钟
+const WEATHER_FAIL_DEBOUNCE = 60000; // 失败后 60s 内不重试外网
+// 缓存剪枝：城市数超上限时清掉过期条目（防任意 city 键无限增长）
+function pruneWeatherCache() {
+  if (weatherCache.size > 50) {
+    const cutoff = Date.now() - WEATHER_TTL;
+    for (const [k, v] of weatherCache) {
+      if (v.at < cutoff) weatherCache.delete(k);
+    }
+  }
+}
 app.get("/api/weather", async (req, res) => {
   const city = String(req.query.city || "").trim() || "54823"; // 默认济南
+  // refresh=1：手动刷新，跳过缓存与失败防抖，强制重新拉取
+  const refresh = req.query.refresh === "1";
+  pruneWeatherCache();
+  const rec = weatherCache.get(city);
   // 命中缓存直接返回
-  if (weatherCache.key === city && weatherCache.data && Date.now() - weatherCache.at < 600000) {
-    return res.json({ ok: true, cached: true, ...weatherCache.data });
+  if (!refresh && rec && rec.data && Date.now() - rec.at < WEATHER_TTL) {
+    return res.json({ ok: true, cached: true, ...rec.data });
   }
   // 失败防抖：上次失败 60s 内不重试外网，直接返回缓存/错误
-  if (Date.now() - weatherCache.failAt < 60000) {
-    if (weatherCache.key === city && weatherCache.data) {
-      return res.json({ ok: true, cached: true, stale: true, ...weatherCache.data });
+  if (!refresh && rec && Date.now() - rec.failAt < WEATHER_FAIL_DEBOUNCE) {
+    if (rec.data) {
+      return res.json({ ok: true, cached: true, stale: true, ...rec.data });
     }
     return res.status(502).json({ ok: false, error: "天气源暂时不可用，请稍后再试" });
   }
   try {
     const headers = { "User-Agent": "Mozilla/5.0" };
-    // 实时（now 接口）+ 预报（weather 接口）并行
+    // 实时（now 接口）+ 预报（weather 接口）并行；5s 超时防外网卡死挂起请求
+    const signal = AbortSignal.timeout(5000);
     const [nowR, wR] = await Promise.all([
-      fetch(`https://weather.cma.cn/api/now/${city}`, { headers }),
-      fetch(`https://weather.cma.cn/api/weather/${city}`, { headers }),
+      fetch(`https://weather.cma.cn/api/now/${city}`, { headers, signal }),
+      fetch(`https://weather.cma.cn/api/weather/${city}`, { headers, signal }),
     ]);
     if (!nowR.ok || !wR.ok) throw new Error(`HTTP ${nowR.status}/${wR.status}`);
     const nowD = await nowR.json();
@@ -80,13 +147,14 @@ app.get("/api/weather", async (req, res) => {
         dayWindScale: day.dayWindScale || "",
       })),
     };
-    weatherCache = { key: city, data, at: Date.now(), failAt: 0 };
+    weatherCache.set(city, { data, at: Date.now(), failAt: 0 });
     res.json({ ok: true, cached: false, ...data });
   } catch (e) {
     // 失败：记 failAt，若有上次成功数据则兜底返回
-    weatherCache = { ...weatherCache, key: city, failAt: Date.now() };
-    if (weatherCache.data && weatherCache.key === city) {
-      return res.json({ ok: true, cached: true, stale: true, ...weatherCache.data });
+    const prev = weatherCache.get(city) || { data: null, at: 0, failAt: 0 };
+    weatherCache.set(city, { ...prev, failAt: Date.now() });
+    if (prev.data) {
+      return res.json({ ok: true, cached: true, stale: true, ...prev.data });
     }
     res.status(502).json({ ok: false, error: "天气获取失败（网络不通）" });
   }
@@ -96,7 +164,11 @@ app.get("/api/weather", async (req, res) => {
 app.get("/api/update-check", async (req, res) => {
   const repo = "zhaozengxiao/net-nav-public";
   try {
-    const r = await fetch(`https://github.com/${repo}/commits/main.atom`, { headers: { "User-Agent": "net-nav" } });
+    // 8s 超时：外网不可达时快速返回，不挂起请求
+    const r = await fetch(`https://github.com/${repo}/commits/main.atom`, {
+      headers: { "User-Agent": "net-nav" },
+      signal: AbortSignal.timeout(8000),
+    });
     if (!r.ok) return res.json({ ok: false, error: `检查失败（HTTP ${r.status}）` });
     const xml = await r.text();
     const m = xml.match(/Grit::Commit\/([0-9a-f]{40})/);
@@ -119,7 +191,13 @@ const clients = new Set();
 
 function broadcast(event, payload) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const res of clients) res.write(msg);
+  for (const res of clients) {
+    try {
+      res.write(msg);
+    } catch {
+      clients.delete(res); // 写失败：连接已断开，剔除
+    }
+  }
 }
 
 function statusSnapshot() {
@@ -142,6 +220,17 @@ app.get("/api/events", (req, res) => {
 
   req.on("close", () => clients.delete(res));
 });
+
+// SSE 心跳：每 30s 发一行注释，防止中间代理/路由器把空闲连接掐断
+setInterval(() => {
+  for (const res of clients) {
+    try {
+      res.write(": ping\n\n");
+    } catch {
+      clients.delete(res); // 连接已断开
+    }
+  }
+}, 30000).unref();
 
 // ---------- 管理认证（支持多会话，token 存列表互不踢） ----------
 // token 内存缓存（5s TTL），避免每请求查库；登录时失效
@@ -167,8 +256,39 @@ function adminAuth(req, res, next) {
 }
 
 // 免密登录：内网自用，直接发放会话 token（token 机制保留，方便日后恢复密码）
+// 可选口令：设置环境变量 ADMIN_PASSWORD 后，登录需携带 { password } 才发 token
+const loginAttempts = new Map(); // ip -> { count, at }，简单内存限流
+// 防 Map 无限增长：超上限时清理过期条目（内网 IP 有限，防御性保留）
+function pruneLoginAttempts() {
+  if (loginAttempts.size > 1000) {
+    const cutoff = Date.now() - 60000;
+    for (const [k, v] of loginAttempts) {
+      if (v.at < cutoff) loginAttempts.delete(k);
+    }
+  }
+}
 app.post("/api/admin/login", (req, res) => {
-  const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  pruneLoginAttempts();
+  const now = Date.now();
+  const rec = loginAttempts.get(ip) || { count: 0, at: now };
+  if (now - rec.at > 60000) {
+    rec.count = 0;
+    rec.at = now;
+  }
+  rec.count++;
+  loginAttempts.set(ip, rec);
+  if (rec.count > 10) return res.status(429).json({ error: "尝试过于频繁，请稍后再试" });
+
+  const adminPassword = process.env.ADMIN_PASSWORD || "";
+  if (adminPassword) {
+    const pwd = String((req.body && req.body.password) || "");
+    // 恒定时间比较（sha256 定长后再比，防时序侧信道）
+    const a = crypto.createHash("sha256").update(pwd).digest();
+    const b = crypto.createHash("sha256").update(adminPassword).digest();
+    if (!crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: "密码错误" });
+  }
+  const token = crypto.randomBytes(24).toString("hex");
   const tokens = getTokens();
   tokens.push(token);
   if (tokens.length > 10) tokens.splice(0, tokens.length - 10); // 保留最近 10 个会话
@@ -382,6 +502,12 @@ app.post("/api/bookmarks/import", (req, res) => {
   res.json({ added, skipped, total: items.length + folders.length });
 });
 
+// 批量清空全部书签（避免前端逐条删除）
+app.delete("/api/bookmarks", (req, res) => {
+  const info = db.prepare("DELETE FROM bookmarks").run();
+  res.json({ ok: true, removed: info.changes });
+});
+
 app.delete("/api/bookmarks/:id", (req, res) => {
   const info = db.prepare("DELETE FROM bookmarks WHERE id = ?").run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: "书签不存在" });
@@ -483,16 +609,42 @@ app.post("/api/bookmarks/delete-folder", (req, res) => {
 });
 
 // ---------- 自动发现：扫描网段 ----------
-app.post("/api/admin/scan", adminAuth, async (req, res) => {
+// NDJSON 流式：扫描进度实时推送，前端边收边更新（/16 全量扫描耗时较长，避免无反馈等待）
+// 客户端断开时：停止推送并中止扫描（AbortController），避免后台白跑几十分钟
+app.post("/api/admin/scan", adminAuth, (req, res) => {
   const { network, mode } = req.body || {};
-  if (!network) return res.status(400).json({ error: "请输入网段，如 192.168.1.0/24" });
-  try {
-    const t0 = Date.now();
-    const found = await scanNetwork(network, mode || "fast");
-    res.json({ found, elapsed: Date.now() - t0 });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
+  if (!network) {
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    return res.end(JSON.stringify({ type: "error", error: "请输入网段，如 192.168.1.0/24" }) + "\n");
   }
+  const m = mode === "full" ? "full" : "fast";
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+  const safeWrite = (obj) => {
+    try {
+      if (!res.writableEnded) res.write(JSON.stringify(obj) + "\n");
+    } catch {
+      res.destroy();
+    }
+  };
+  // 客户端断开（连接关闭且响应未结束）时中止扫描
+  res.on("close", () => {
+    if (!res.writableEnded) ctrl.abort();
+  });
+  scanNetwork(network, m, (done, total, foundCount) => {
+    safeWrite({ type: "progress", done, total, found: foundCount });
+  }, ctrl.signal)
+    .then((found) => {
+      safeWrite({ type: "done", found, elapsed: Date.now() - t0 });
+      if (!res.writableEnded) res.end();
+    })
+    .catch((e) => {
+      safeWrite({ type: "error", error: e.message });
+      if (!res.writableEnded) res.end();
+    });
 });
 
 // ---------- 管理：分组 CRUD ----------
@@ -540,8 +692,19 @@ app.put("/api/admin/groups/:id", adminAuth, (req, res) => {
 });
 
 app.delete("/api/admin/groups/:id", adminAuth, (req, res) => {
-  db.prepare("DELETE FROM services WHERE group_id = ?").run(req.params.id);
-  db.prepare("DELETE FROM groups WHERE id = ?").run(req.params.id);
+  const gid = Number(req.params.id);
+  // 事务删除 + 清理缓存（防半删除、防 monitor/docker 缓存残留）
+  const tx = db.transaction(() => {
+    const svcs = db.prepare("SELECT id FROM services WHERE group_id = ?").all(gid);
+    db.prepare("DELETE FROM services WHERE group_id = ?").run(gid);
+    db.prepare("DELETE FROM groups WHERE id = ?").run(gid);
+    return svcs.map((s) => s.id);
+  });
+  const ids = tx();
+  ids.forEach((id) => {
+    monitor.cache.delete(id);
+    dockerCache.delete(id);
+  });
   res.json({ ok: true });
 });
 
@@ -595,7 +758,8 @@ app.post("/api/admin/services/import", adminAuth, (req, res) => {
   const newIds = [];
   const tx = db.transaction(() => {
     const addSvc = (gid, s) => {
-      if (!s || !s.name || !s.url) return;
+      // 导入同样走 URL 协议白名单（防 javascript: 存储型 XSS）
+      if (!s || !s.name || !isSafeUrl(s.url)) return;
       const key = `${s.name}|${s.url}`;
       if (existingS.has(key)) {
         skippedServices++;
@@ -642,6 +806,7 @@ app.post("/api/admin/services/import", adminAuth, (req, res) => {
 app.post("/api/admin/services", adminAuth, (req, res) => {
   const { group_id, name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
   if (!name || !url) return res.status(400).json({ error: "名称和地址必填" });
+  if (!isSafeUrl(url)) return res.status(400).json({ error: "地址需以 http(s):// 开头" });
   const gid = Number.isInteger(group_id) ? group_id : defaultGroupId();
   const info = db
     .prepare(
@@ -658,7 +823,7 @@ app.post("/api/admin/services", adminAuth, (req, res) => {
       docker_container || "",
       docker_image || ""
     );
-  monitor.probe(url).then((r) => monitor.cache.set(info.lastInsertRowid, r));
+  monitor.probe(url).then((r) => monitor.cache.set(info.lastInsertRowid, r), () => {});
   if (docker_container && docker_image) queueDockerCheck(info.lastInsertRowid);
   res.json({ id: info.lastInsertRowid });
 });
@@ -685,11 +850,14 @@ app.put("/api/admin/services/:id", adminAuth, (req, res) => {
   const s = db.prepare("SELECT * FROM services WHERE id = ?").get(req.params.id);
   if (!s) return res.status(404).json({ error: "服务不存在" });
   const { group_id, name, url, description, icon, color, sort, docker_container, docker_image } = req.body || {};
+  if (url !== undefined && !isSafeUrl(url)) return res.status(400).json({ error: "地址需以 http(s):// 开头" });
+  const newName = name === undefined ? s.name : String(name).trim();
+  if (!newName) return res.status(400).json({ error: "名称不能为空" });
   db.prepare(
     "UPDATE services SET group_id=?, name=?, url=?, description=?, icon=?, color=?, sort=?, docker_container=?, docker_image=? WHERE id=?"
   ).run(
     Number.isInteger(group_id) ? group_id : s.group_id,
-    name ?? s.name,
+    newName,
     url ?? s.url,
     description ?? s.description,
     icon ?? s.icon,
@@ -699,14 +867,16 @@ app.put("/api/admin/services/:id", adminAuth, (req, res) => {
     docker_image ?? s.docker_image,
     s.id
   );
-  if (url && url !== s.url) monitor.probe(url).then((r) => monitor.cache.set(s.id, r));
+  if (url && url !== s.url) monitor.probe(url).then((r) => monitor.cache.set(s.id, r), () => {});
   if (docker_container || docker_image) queueDockerCheck(s.id);
   res.json({ ok: true });
 });
 
 app.delete("/api/admin/services/:id", adminAuth, (req, res) => {
-  db.prepare("DELETE FROM services WHERE id = ?").run(req.params.id);
-  monitor.cache.delete(Number(req.params.id));
+  const id = Number(req.params.id);
+  db.prepare("DELETE FROM services WHERE id = ?").run(id);
+  monitor.cache.delete(id);
+  dockerCache.delete(id); // 防缓存 Map 无限增长
   res.json({ ok: true });
 });
 
@@ -725,10 +895,13 @@ function dockerCfg() {
   }
 }
 
-// 并发限 3，避免一次检测所有容器把 SSH 打满
+// 并发限 3，避免一次检测所有容器把 SSH 打满；queuedIds 去重，防重复触发冗余检测
 const queue = [];
+const queuedIds = new Set();
 let running = 0;
 function queueDockerCheck(id) {
+  if (queuedIds.has(id)) return;
+  queuedIds.add(id);
   queue.push(id);
   drainQueue();
 }
@@ -740,6 +913,7 @@ function drainQueue() {
   running++;
   const svc = db.prepare("SELECT * FROM services WHERE id = ?").get(id);
   if (!svc || !svc.docker_container || !svc.docker_image) {
+    queuedIds.delete(id);
     running--;
     drainQueue();
     return;
@@ -750,6 +924,7 @@ function drainQueue() {
     .then((r) => dockerCache.set(id, r))
     .catch((e) => dockerCache.set(id, { status: "error", error: e.message, checkedAt: Date.now() }))
     .finally(() => {
+      queuedIds.delete(id); // 检测完成才放行同 id 重新入队（running 期间保持去重）
       running--;
       drainQueue();
     });
@@ -763,17 +938,25 @@ function scheduleDockerChecks() {
     .prepare("SELECT id FROM services WHERE docker_container != '' AND docker_image != ''")
     .all()
     .map((r) => r.id);
-  ids.forEach((id) => queue.push(id));
-  drainQueue();
+  ids.forEach((id) => queueDockerCheck(id));
 }
 
-// 读/写 SSH 配置（内网自用，明文存 settings）
+// 读/写 SSH 配置（内网自用，明文存 settings；密码只写不回，GET 脱敏）
 app.get("/api/admin/docker-config", adminAuth, (req, res) => {
-  res.json(dockerCfg() || { host: "", port: 22, user: "", pass: "" });
+  const cfg = dockerCfg();
+  if (!cfg) return res.json({ host: "", port: 22, user: "", pass: "", hasPass: false });
+  res.json({ ...cfg, pass: cfg.pass ? "******" : "", hasPass: !!cfg.pass });
 });
 app.put("/api/admin/docker-config", adminAuth, (req, res) => {
   const { host, port, user, pass } = req.body || {};
-  const cfg = { host: host || "", port: Number(port) || 22, user: user || "", pass: pass || "" };
+  const prev = dockerCfg();
+  // 密码语义：空串/掩码 = 保持不变（防前端回传空串清掉已有密码）；显式 null = 清除密码
+  const isMask = pass === "******";
+  let nextPass;
+  if (pass === null) nextPass = "";
+  else if (typeof pass === "string" && pass.trim() !== "" && !isMask) nextPass = pass;
+  else nextPass = (prev && prev.pass) || "";
+  const cfg = { host: host || "", port: Number(port) || 22, user: user || "", pass: nextPass };
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('docker_ssh', ?)").run(JSON.stringify(cfg));
   dockerCfgCache = null; // 失效缓存
   res.json({ ok: true });
@@ -818,6 +1001,79 @@ app.put("/api/admin/monitor-config", adminAuth, (req, res) => {
 // 启动时自动检测一轮（若有配置）
 setTimeout(scheduleDockerChecks, 2000);
 restartDockerTimer();
+
+// ---------- 爱快 v4.0 网速监控 ----------
+let ikuaiTraffic = { up: -1, down: -1, checkedAt: 0, error: "未配置" };
+let ikuaiTimer = null;
+
+function ikuaiCfg() {
+  try {
+    return JSON.parse(db.prepare("SELECT value FROM settings WHERE key='ikuai_config'").get()?.value || "null");
+  } catch {
+    return null;
+  }
+}
+
+async function ikuaiPoll() {
+  const cfg = ikuaiCfg();
+  if (!cfg || !cfg.host || !cfg.token) return;
+  const r = await ikuai.fetchTraffic(cfg);
+  ikuaiTraffic = r;
+  // SSE 推送流量事件
+  broadcast("traffic", { up: r.up, down: r.down, checkedAt: r.checkedAt, error: r.error });
+}
+
+function restartIkuaiTimer() {
+  if (ikuaiTimer) clearInterval(ikuaiTimer);
+  const cfg = ikuaiCfg();
+  if (!cfg || !cfg.host || !cfg.token) return;
+  const interval = Math.max(Math.min(Number(cfg.interval) || 3, 30), 1) * 1000;
+  ikuaiPoll(); // 立即拉一次
+  ikuaiTimer = setInterval(ikuaiPoll, interval);
+}
+
+// 配置 CRUD（密码脱敏，沿用 Docker 配置模式）
+let ikuaiCfgCache = null;
+app.get("/api/admin/ikuai-config", adminAuth, (req, res) => {
+  const cfg = ikuaiCfg();
+  if (!cfg) return res.json({ host: "", port: 443, token: "", interval: 3, https: true, hasToken: false });
+  // 迁移旧配置：https 开启时端口强制 443，端口 80 时 https 强制关闭
+  const https = cfg.https !== false;
+  const port = https ? (cfg.port && cfg.port !== 80 ? cfg.port : 443) : (cfg.port || 80);
+  const migrated = { host: cfg.host || "", port, token: cfg.token || "", interval: cfg.interval ?? 3, https };
+  res.json({ ...migrated, token: cfg.token ? "******" : "", hasToken: !!cfg.token });
+});
+app.put("/api/admin/ikuai-config", adminAuth, (req, res) => {
+  const { host, port, token, interval, https } = req.body || {};
+  const prev = ikuaiCfg();
+  const isMask = token === "******";
+  let nextToken;
+  if (token === null) nextToken = "";
+  else if (typeof token === "string" && token.trim() !== "" && !isMask) nextToken = token.trim();
+  else nextToken = (prev && prev.token) || "";
+  const cfg = { host: host || "", port: Number(port) || (https !== false ? 443 : 80), token: nextToken, interval: Math.min(Math.max(Number(interval) || 3, 1), 30), https: https !== false };
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ikuai_config', ?)").run(JSON.stringify(cfg));
+  ikuaiCfgCache = null;
+  restartIkuaiTimer();
+  res.json({ ok: true });
+});
+
+// 流量公开 API（前端轮询兜底/SSE 事件优先）
+app.get("/api/traffic", (req, res) => {
+  res.json(ikuaiTraffic);
+});
+
+// 测试连接
+app.post("/api/admin/ikuai-test", adminAuth, async (req, res) => {
+  const { host, port, token, https } = req.body || {};
+  const isHttps = https !== false;
+  const cfg = { host: host || "", port: Number(port) || (isHttps ? 443 : 80), token: token || "", https: isHttps };
+  const r = await ikuai.testConnection(cfg);
+  res.json(r);
+});
+
+// 启动时尝试轮询（若有配置）
+restartIkuaiTimer();
 
 // ---------- 生产：serve 前端构建产物（单容器/单端口部署） ----------
 const distDir = [path.join(__dirname, "..", "web", "dist"), path.join(__dirname, "public")].find((d) =>

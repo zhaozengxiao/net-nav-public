@@ -7,3 +7,12 @@
 .git
 .gitignore
 data
+# 密钥与环境文件（防构建上下文携带敏感字节）
+.env
+.env.*
+*.pem
+# 与镜像无关的仓库文件（减小构建上下文）
+.github
+docker-compose.yml
+README.md
+AI-API.md

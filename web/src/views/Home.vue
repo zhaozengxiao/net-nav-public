@@ -26,7 +26,7 @@
         <input ref="importInput" type="file" accept=".html" hidden @change="importBookmarks" />
       </div>
       <div class="fav-list">
-        <BmTree :nodes="bmTree" :status="bmStatus" @open="openUrl" @remove="removeBookmark" @expand="checkBookmarks" @ctx="showCtx" />
+        <BmTree :nodes="bmTree" :status="bmStatus" @open="openUrl" @expand="checkBookmarks" @ctx="showCtx" />
         <div v-if="!bookmarks.length" class="fav-empty">
           暂无书签<br />点 📥 导入浏览器书签<br />（浏览器导出为 HTML）
         </div>
@@ -55,19 +55,25 @@
     </div>
 
     <!-- 时钟区 -->
-    <section class="hero">
+    <section ref="heroRef" class="hero">
       <div class="hero-center">
         <div class="greeting">{{ greeting }}，{{ nowDate }}</div>
         <Vue3FlipClock />
         <div class="sub">
+          <span v-if="trafficData.up >= 0" class="traffic">
+            <span class="t-up" :class="{ active: trafficFilter === 'up', off: trafficFilter === 'down' }" title="点击筛选上行曲线" @click="toggleFilter('up')">↑ {{ fmtSpeed(trafficData.up) }}</span>
+            <span class="t-down" :class="{ active: trafficFilter === 'down', off: trafficFilter === 'up' }" title="点击筛选下行曲线" @click="toggleFilter('down')">↓ {{ fmtSpeed(trafficData.down) }}</span>
+            ·
+          </span>
           共 {{ totalServices }} 个服务 · {{ onlineCount }} 个在线 ·
           <span class="sse-dot" :class="sseState"></span>{{ sseText }}
         </div>
       </div>
+      <TrafficCard />
       <WeatherCard />
 
     </section>
-      <div class="search-box" @click="focusSearch">
+      <div ref="searchBoxRef" class="search-box" @click="focusSearch">
 
         <span class="search-icon">🔍</span>
         <input ref="searchInputRef" v-model="keyword" placeholder="搜索服务名称、描述…" />
@@ -83,86 +89,20 @@
             <span class="group-count">{{ g.list.length }} 个</span>
           </div>
           <div v-if="!groupCollapsed.has(g.id)" class="cards">
-            <a
-              v-for="s in g.list"
-              :key="s.id"
-              class="card"
-              :data-id="s.id"
-              :style="{ '--c': s.color }"
-              :href="s.url"
-              target="_blank"
-              rel="noopener"
-              @click="track(s)"
-              @contextmenu="showSvcCtx($event, s)"
-            >
-              <span class="status-dot" :class="statusClass(s)" :title="statusText(s)"></span>
-              <span
-                class="card-icon"
-                :style="{
-                  background: `radial-gradient(circle at 30% 25%, ${hexToRgba(s.color, 0.45)}, ${hexToRgba(s.color, 0.1)})`,
-                  borderColor: hexToRgba(s.color, 0.35),
-                  boxShadow: `0 4px 20px ${hexToRgba(s.color, 0.22)}`,
-                }"
-              >
-                {{ s.icon }}
-              </span>
-              <div class="card-body">
-                <div class="card-name">{{ s.name }}</div>
-                <div class="card-desc">{{ s.description || s.url }}</div>
-              </div>
-              <div class="card-foot">
-                <span class="card-status">{{ statusText(s) }}</span>
-                <span class="card-foot-right">
-                  <span v-if="s.docker_container" class="docker-badge" :class="dockerClass(s)">{{ dockerText(s) }}</span>
-                  <span class="card-clicks">🔥 {{ s.clicks }}</span>
-                </span>
-              </div>
-            </a>
+            <ServiceCard v-for="s in g.list" :key="s.id" :s="s" @ctx="showSvcCtx" />
           </div>
         </section>
       </template>
 
       <!-- 扁平模式：全部平铺 -->
       <div v-else ref="cardsWrap" class="cards">
-        <a
-          v-for="s in filteredServices"
-          :key="s.id"
-          class="card"
-          :data-id="s.id"
-          :style="{ '--c': s.color }"
-          :href="s.url"
-          target="_blank"
-          rel="noopener"
-          @click="track(s)"
-          @contextmenu="showSvcCtx($event, s)"
-        >
-          <span class="status-dot" :class="statusClass(s)" :title="statusText(s)"></span>
-          <span
-            class="card-icon"
-            :style="{
-              background: `radial-gradient(circle at 30% 25%, ${hexToRgba(s.color, 0.45)}, ${hexToRgba(s.color, 0.1)})`,
-              borderColor: hexToRgba(s.color, 0.35),
-              boxShadow: `0 4px 20px ${hexToRgba(s.color, 0.22)}`,
-            }"
-          >
-            {{ s.icon }}
-          </span>
-          <div class="card-body">
-            <div class="card-name">{{ s.name }}</div>
-            <div class="card-desc">{{ s.description || s.url }}</div>
-          </div>
-          <div class="card-foot">
-            <span class="card-status">{{ statusText(s) }}</span>
-            <span class="card-foot-right">
-              <span v-if="s.docker_container" class="docker-badge" :class="dockerClass(s)">{{ dockerText(s) }}</span>
-              <span class="card-clicks">🔥 {{ s.clicks }}</span>
-            </span>
-          </div>
-        </a>
+        <ServiceCard v-for="s in filteredServices" :key="s.id" :s="s" @ctx="showSvcCtx" />
       </div>
 
       <div v-if="filteredServices.length === 0" class="no-result">
-        😕 没有找到匹配「{{ keyword }}」的服务
+        <template v-if="keyword">😕 没有找到匹配「{{ keyword }}」的服务</template>
+        <template v-else-if="sseState === 'closed'">📡 后端未连接，服务列表加载失败</template>
+        <template v-else>📭 暂无服务，点右上角 ⚙️ 进入后台添加</template>
       </div>
     </main>
 
@@ -171,30 +111,41 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, onBeforeUnmount, reactive, ref, watch, nextTick, PropType } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Solar } from "lunar-javascript";
 import Sortable from "sortablejs";
 import WeatherCard from "../components/WeatherCard.vue";
+import TrafficCard from "../components/TrafficCard.vue";
+import ServiceCard from "../components/ServiceCard.vue";
+import BmTree from "../components/BmTree.vue";
+import type { BmNode } from "../components/BmTree.vue";
+import { useBookmarks } from "../composables/useBookmarks";
+import { trafficFilter } from "../composables/trafficFilter";
 import api from "../api";
-
-interface Service {
-  id: number;
-  name: string;
-  url: string;
-  description: string;
-  icon: string;
-  color: string;
-  clicks: number;
-  group_id: number;
-  groupName: string;
-  status: { online: boolean; ms: number; code: number | null } | null;
-}
+import { statusText, dockerText, fmtSpeed } from "../utils";
+import type { Service } from "../utils";
 
 const services = ref<Service[]>([]);
 const keyword = ref("");
 const nowDate = ref("");
 const searchInputRef = ref<HTMLInputElement>();
+const heroRef = ref<HTMLElement | null>(null);
+const searchBoxRef = ref<HTMLElement | null>(null);
+let posObserver: ResizeObserver | undefined;
+
+// 根据 search-box 宽度动态计算两侧卡片位置
+function updateCardPos() {
+  const hero = heroRef.value;
+  const sb = searchBoxRef.value;
+  if (!hero || !sb) return;
+  const rect = sb.getBoundingClientRect();
+  hero.style.setProperty("--search-left", `${rect.left}px`);
+  hero.style.setProperty("--search-right", `${rect.right}px`);
+}
+
+// 书签数据层（加载/导入/删除/连通性检测/树构建）
+const { bookmarks, bmStatus, importInput, bmTree, openUrl, importBookmarks, loadBookmarks, checkBookmarks } = useBookmarks();
 
 // 书签面板开合状态（不记忆，每次打开页面默认收起）
 const favOpen = ref(false);
@@ -210,180 +161,11 @@ watch(favOpen, (v) => {
   closeAll(bmTree.value);
   checkBookmarks();
 });
-const bookmarks = ref<{ id: number; name: string; url: string; path: string[]; sort: number }[]>([]);
-const bmStatus = ref<Record<string, { online: boolean; ms: number }>>({});
-const importInput = ref<HTMLInputElement>();
-
-// 按需检测书签连通性：展开哪个文件夹就重新检测哪个（先重置状态再检测）
-async function checkBookmarks(urls?: string[]) {
-  let todo: string[];
-  if (urls && urls.length) {
-    todo = urls;
-    // 先重置这些书签的状态（显示为检测中）
-    const next = { ...bmStatus.value };
-    todo.forEach((u) => delete next[u]);
-    bmStatus.value = next;
-  } else {
-    // 打开面板：只检测根目录直属书签
-    todo = bookmarks.value.filter((b) => b.path.length === 0).map((b) => b.url);
-  }
-  if (!todo.length) return;
-  try {
-    // 流式检测：每完成一条立即返回，边收边更新状态点（不等待全部）
-    const resp = await fetch("/api/bookmarks/check-stream", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ urls: todo }),
-    });
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() || "";
-      const next: Record<string, { online: boolean; ms: number }> = {};
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const d = JSON.parse(line);
-          next[d.url] = { online: d.online, ms: d.ms };
-        } catch {
-          /* 忽略不完整行 */
-        }
-      }
-      if (Object.keys(next).length) bmStatus.value = { ...bmStatus.value, ...next };
-    }
-  } catch {
-    /* 检测失败保持 unknown */
-  }
-}
-
-interface BmNode {
-  type: "folder" | "bookmark";
-  name: string;
-  url?: string;
-  id?: number;
-  path?: string[];
-  children?: BmNode[];
-  open?: boolean;
-}
-
-// 平铺书签 -> 文件夹树
-const bmTree = computed<BmNode[]>(() => {
-  const root: BmNode[] = [];
-  const map = new Map<string, BmNode>();
-  const key = (p: string[]) => p.join("\u0000");
-  for (const b of [...bookmarks.value].sort((a, c) => a.path.length - c.path.length || a.sort - c.sort)) {
-    let cur = root;
-    const acc: string[] = [];
-    for (const seg of b.path) {
-      acc.push(seg);
-      const k = key(acc);
-      let node = map.get(k);
-      if (!node) {
-        node = { type: "folder", name: seg, path: [...acc], children: [], open: false };
-        map.set(k, node);
-        cur.push(node);
-      }
-      cur = node.children!;
-    }
-    cur.push({ type: "bookmark", name: b.name, url: b.url, id: b.id });
-  }
-  return reactive(root) as BmNode[]; // 深度响应式，文件夹折叠状态可更新
-});
-
-// 递归渲染书签树（文件夹可折叠）
-const BmTree = defineComponent({
-  name: "BmTree",
-  props: {
-    nodes: { type: Array as PropType<BmNode[]>, required: true },
-    status: { type: Object as PropType<Record<string, { online: boolean; ms: number }>>, default: () => ({}) },
-  },
-  emits: ["open", "remove", "expand", "ctx"],
-  setup(props, { emit }) {
-    return () =>
-      h("div", { class: "bm-tree" }, (props.nodes || []).map((n) => {
-        if (n.type === "folder") {
-          return h("div", { class: "bm-folder" }, [
-            h("button", {
-              class: "bm-folder-btn",
-              onClick: () => {
-                n.open = !n.open;
-                if (n.open) {
-                  const urls = n.children.filter((c) => c.type === "bookmark").map((c) => c.url);
-                  if (urls.length) emit("expand", urls);
-                }
-              },
-              onContextmenu: (e: MouseEvent) => emit("ctx", e, n),
-            }, [
-              h("span", { class: "bm-caret" }, n.open ? "▾" : "▸"),
-              h("span", { class: "bm-folder-name" }, `📁 ${n.name}`),
-            ]),
-            n.open && n.children?.length
-              ? h(BmTree, {
-                  nodes: n.children,
-                  status: props.status,
-                  onOpen: (u: string) => emit("open", u),
-                  onRemove: (i: number) => emit("remove", i),
-                  onExpand: (urls: string[]) => emit("expand", urls),
-                  onCtx: (e: MouseEvent, bm: BmNode) => emit("ctx", e, bm),
-                })
-              : null,
-          ]);
-        }
-        const st = props.status?.[n.url];
-        let dot = "unknown";
-        let dotTitle = "状态未知";
-        if (st) {
-          if (!st.online) { dot = "offline"; dotTitle = "离线"; }
-          else if (st.ms > 500) { dot = "slow"; dotTitle = `延迟高 ${st.ms}ms`; }
-          else { dot = "online"; dotTitle = `在线 ${st.ms}ms`; }
-        }
-        return h("div", { class: "fav-item", title: `${n.url}（${dotTitle}）`, onClick: () => emit("open", n.url), onContextmenu: (e: MouseEvent) => emit("ctx", e, n) }, [
-          h("span", { class: `fav-dot ${dot}`, title: dotTitle }),
-          h("span", { class: "fav-name" }, n.name),
-        ]);
-      }));
-  },
-});
-
-function openUrl(b: string | { url: string }) {
-  const url = typeof b === "string" ? b : b.url;
-  window.open(url, "_blank");
-}
-
-// 导入浏览器书签 HTML
-async function importBookmarks(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  const html = await file.text();
-  try {
-    const r = await api.post("/bookmarks/import", { html });
-    await loadBookmarks();
-    ElMessage.success(`导入完成：新增 ${r.added} 个，跳过重复 ${r.skipped} 个`);
-  } catch {
-    ElMessage.error("导入失败，请确认文件是浏览器导出的书签 HTML");
-  }
-}
-
-async function loadBookmarks() {
-  // 过滤空文件夹占位行（url 为空，仅后台用于表示空文件夹）
-  bookmarks.value = (await api.get("/bookmarks")).filter((b: any) => b.url);
-}
-
-async function removeBookmark(b: { id: number }) {
-  await api.delete(`/bookmarks/${b.id}`);
-  bookmarks.value = bookmarks.value.filter((x) => x.id !== b.id);
-}
 
 // 检查更新：对比本地版本与 GitHub 公开仓库
-async function checkUpdate() {  try {
-    const r: any = await api.get("/update-check");
+async function checkUpdate() {
+  try {
+    const r: any = await api.get("/update-check", { silent: true });
     if (!r.ok) return ElMessage.error(r.error || "检查失败");
     if (r.hasUpdate) {
       try {
@@ -409,9 +191,10 @@ const ctxMenu = ref<{ x: number; y: number; target: any } | null>(null);
 function showCtx(e: MouseEvent, target: any) {
   e.preventDefault();
   e.stopPropagation();
+  // 钳制最小坐标：超窄窗口下不会算出负值溢出屏幕
   ctxMenu.value = {
-    x: Math.min(e.clientX, window.innerWidth - 150),
-    y: Math.min(e.clientY, window.innerHeight - 180),
+    x: Math.max(4, Math.min(e.clientX, window.innerWidth - 150)),
+    y: Math.max(4, Math.min(e.clientY, window.innerHeight - 180)),
     target,
   };
 }
@@ -542,12 +325,21 @@ async function ctxDelete() {
     return;
   }
   if (t.type === "service") {
-    await api.delete(`/admin/services/${t.id}`);
-    services.value = services.value.filter((x) => x.id !== t.id);
-    ElMessage.success("已删除服务");
+    try {
+      await api.delete(`/admin/services/${t.id}`);
+      services.value = services.value.filter((x) => x.id !== t.id);
+      ElMessage.success("已删除服务");
+    } catch {
+      ElMessage.error("删除服务失败");
+    }
   } else {
-    await removeBookmark({ id: t.id });
-    ElMessage.success("已删除");
+    try {
+      await api.delete(`/bookmarks/${t.id}`);
+      bookmarks.value = bookmarks.value.filter((x) => x.id !== t.id);
+      ElMessage.success("已删除");
+    } catch {
+      ElMessage.error("删除书签失败");
+    }
   }
   closeCtx();
 }
@@ -566,12 +358,24 @@ const sseState = ref<"connecting" | "open" | "closed">("connecting");
 let timer: number | undefined;
 let sse: EventSource | null = null;
 
+// 爱快网速（SSE traffic 事件更新，sub 行显示）
+const trafficData = ref<{ up: number; down: number; error?: string }>({ up: -1, down: -1 });
+
+// 点击 ↑ / ↓ 切换图表筛选（再点一次恢复全部）
+function toggleFilter(which: "up" | "down") {
+  trafficFilter.value = trafficFilter.value === which ? "all" : which;
+}
+
 // 动态粒子背景（tsParticles 现成库，零 CDN）
+// 移动端降量（电池/性能）；页面隐藏时暂停动画
+const isMobileParticles = typeof window !== "undefined" && window.innerWidth < 768;
 const particleOptions = {
   fullScreen: { enable: false },
   fpsLimit: 60,
+  pauseOnBlur: true,
+  pauseOnOutsideViewport: true,
   particles: {
-    number: { value: 120, density: { enable: true, width: 1400, height: 800 } },
+    number: { value: isMobileParticles ? 45 : 120, density: { enable: true, width: 1400, height: 800 } },
     color: { value: ["#ffffff", "#bfdbfe", "#7dd3fc"] },
     shape: { type: "circle" },
     opacity: { value: { min: 0.3, max: 0.9 } },
@@ -708,15 +512,28 @@ function initCardSortable() {
           if (navigator.vibrate) navigator.vibrate(10);
         },
         onEnd: async () => {
-          const ids = Array.from(document.querySelectorAll(".cards .card"))
+          const domIds = Array.from(document.querySelectorAll(".cards .card"))
             .map((c) => Number((c as HTMLElement).dataset.id))
             .filter((n) => Number.isInteger(n));
-          if (ids.length < 2) return;
+          if (domIds.length < 2) return;
           try {
-            await api.put("/admin/services/reorder", { ids });
+            await api.put("/admin/services/reorder", { ids: domIds });
+            if (!groupMode.value) {
+              // 扁平模式：所有卡片都在 DOM，本地同步顺序避免全量刷新闪烁
+              const byId = new Map(services.value.map((s) => [s.id, s]));
+              // 防御：DOM 里出现本地没有的服务（拖拽期间被删）时放弃本地重排，回拉服务端
+              if (domIds.some((id) => !byId.has(id))) {
+                await load();
+              } else {
+                services.value = domIds.map((id) => byId.get(id)) as Service[];
+              }
+            } else {
+              // 分组模式：折叠分组不在 DOM，本地重排会截断数据，回拉服务端顺序
+              await load();
+            }
             ElMessage.success("排序已保存");
-            await load(); // 重新拉取服务，同步前端顺序（避免切换分组/扁平时复位）
           } catch {
+            await load(); // 保存失败则回拉服务端顺序
             ElMessage.error("保存排序失败（请先在后台登录）");
           }
         },
@@ -725,7 +542,8 @@ function initCardSortable() {
   }
 }
 
-watch([keyword, groupMode, groupCollapsed], async () => {
+// 服务/分组加载、搜索、分组模式、折叠状态变化时统一重建拖拽（合并原两个 watcher，避免每按键重建两轮）
+watch([services, groupsData, keyword, groupMode, groupCollapsed], async () => {
   await nextTick();
   initGroupSortable();
   initCardSortable();
@@ -734,8 +552,10 @@ watch([keyword, groupMode, groupCollapsed], async () => {
 const totalServices = computed(() => services.value.length);
 const onlineCount = computed(() => services.value.filter((s) => s.status?.online).length);
 
+// 问候语按小时更新：nowHour 由 tick() 每秒刷新，跨时段自动切换（修复之前 computed 无响应式依赖导致冻结）
+const nowHour = ref(new Date().getHours());
 const greeting = computed(() => {
-  const h = new Date().getHours();
+  const h = nowHour.value;
   if (h < 6) return "夜深了，注意休息";
   if (h < 9) return "早上好";
   if (h < 12) return "上午好";
@@ -744,8 +564,15 @@ const greeting = computed(() => {
   return "晚上好";
 });
 
+// 日期文本按天缓存：每秒 tick 只更新小时（问候语），日期/农历等按天计算的结果跨天前不重复算（lunar-javascript 较耗 CPU）
+let lastDateKey = "";
 function tick() {
   const now = new Date();
+  nowHour.value = now.getHours();
+  // 用本地日期做缓存键（toISOString 是 UTC，东八区凌晨 0-8 点会误判未跨天）
+  const dateKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  if (dateKey === lastDateKey) return;
+  lastDateKey = dateKey;
   const parts: string[] = [
     now.toLocaleDateString("zh-CN", {
       year: "numeric",
@@ -771,59 +598,15 @@ function tick() {
   nowDate.value = parts.join(" ");
 }
 
-function statusClass(s: Service) {
-  if (!s.status) return "unknown";
-  return s.status.online ? "online" : "offline";
-}
-function statusText(s: Service) {
-  if (!s.status) return "检测中…";
-  return s.status.online ? `${s.status.ms}ms` : "离线";
-}
-
-// ---- Docker 镜像更新 ----
-function dockerClass(s: Service) {
-  const st = s.docker?.status;
-  if (st === "latest") return "d-latest";
-  if (st === "update") return "d-update";
-  if (st === "checking") return "d-checking";
-  return "d-unknown";
-}
-function dockerText(s: Service) {
-  const st = s.docker?.status;
-  if (!st || st === "checking") return "🐳 检测中";
-  switch (st) {
-    case "latest":
-      return "🐳 已最新";
-    case "update":
-      return "🔄 可更新";
-    case "notfound":
-      return "🐳 容器未找到";
-    case "nodigest":
-      return "🐳 无镜像信息";
-    default:
-      return "🐳 检测失败";
-  }
-}
-
-function hexToRgba(hex: string, a: number) {
-  const m = hex.replace("#", "");
-  const n = parseInt(m.length === 3 ? m.split("").map((c) => c + c).join("") : m, 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-}
-
-function track(s: Service) {
-  api.post(`/click/${s.id}`).catch(() => {});
-  s.clicks++;
-}
-
 async function load() {
   try {
-    services.value = await api.get("/services");
+    // silent：断网/后端未启动时不弹错误 toast，页面保持上次数据降级展示
+    services.value = await api.get("/services", { silent: true });
   } catch {
     /* 后端未启动时静默 */
   }
   try {
-    groupsData.value = await api.get("/groups");
+    groupsData.value = await api.get("/groups", { silent: true });
   } catch {
     /* 分组加载失败静默 */
   }
@@ -834,17 +617,31 @@ function updateStatus(id: number, status: any) {
   if (s) s.status = status;
 }
 
+// SSE 消息解析保护：坏消息/非数组直接忽略，不影响后续推送（防快照丢失）
+function applyStatusList(raw: string) {
+  let list: { id: number; status: any }[];
+  try {
+    list = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(list)) return;
+  for (const { id, status } of list) {
+    if (Number.isInteger(id)) updateStatus(id, status);
+  }
+}
+
 // SSE 实时推送：状态一变，后端主动推过来，零轮询
 function connectSSE() {
   sse = new EventSource("/api/events");
 
-  sse.addEventListener("snapshot", (e) => {
-    const list = JSON.parse((e as MessageEvent).data);
-    for (const { id, status } of list) updateStatus(id, status);
-  });
-  sse.addEventListener("status", (e) => {
-    const list = JSON.parse((e as MessageEvent).data);
-    for (const { id, status } of list) updateStatus(id, status);
+  sse.addEventListener("snapshot", (e) => applyStatusList((e as MessageEvent).data));
+  sse.addEventListener("status", (e) => applyStatusList((e as MessageEvent).data));
+  // 爱快网速：后端每 3 秒推一次
+  sse.addEventListener("traffic", (e) => {
+    try {
+      trafficData.value = JSON.parse((e as MessageEvent).data);
+    } catch { /* 忽略 */ }
   });
   sse.onopen = () => (sseState.value = "open");
   // EventSource 断线会自动重连，重连后收到 snapshot 全量同步
@@ -868,12 +665,11 @@ onMounted(() => {
   connectSSE(); // 状态实时推送，无需轮询
   document.addEventListener("click", onClickOutside);
   document.addEventListener("contextmenu", onDocCtx);
-  // 服务/分组加载完成后初始化拖拽
-  watch([services, groupsData, keyword, groupMode, groupCollapsed], async () => {
-    await nextTick();
-    initGroupSortable();
-    initCardSortable();
-  });
+  // 卡片位置随 search-box 宽度动态调整
+  updateCardPos();
+  posObserver = new ResizeObserver(updateCardPos);
+  if (searchBoxRef.value) posObserver.observe(searchBoxRef.value);
+  window.addEventListener("resize", updateCardPos);
 });
 
 onBeforeUnmount(() => {
@@ -881,6 +677,13 @@ onBeforeUnmount(() => {
   sse?.close();
   document.removeEventListener("click", onClickOutside);
   document.removeEventListener("contextmenu", onDocCtx);
+  // 销毁拖拽实例，防路由切换后残留 DOM 引用与监听
+  cardSortables.forEach((s) => s.destroy());
+  cardSortables = [];
+  groupSortable?.destroy();
+  groupSortable = null;
+  posObserver?.disconnect();
+  window.removeEventListener("resize", updateCardPos);
 });
 
 // 点击书签面板外部任意位置 → 关闭面板
@@ -975,22 +778,11 @@ function onClickOutside(e: MouseEvent) {
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
 }
 
-/* 卡片拖拽 */
-.sortable-ghost {
-  opacity: 0.45;
-  outline: 2px dashed rgba(100, 160, 255, 0.7);
-  outline-offset: 2px;
-  background: rgba(56, 132, 255, 0.08);
-}
+/* 卡片容器（卡片本身样式在 ServiceCard.vue） */
 .cards {
   cursor: default;
 }
-.cards .card {
-  cursor: grab;
-}
-.cards .card:active {
-  cursor: grabbing;
-}.group-title {
+.group-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1070,6 +862,33 @@ function onClickOutside(e: MouseEvent) {
   color: var(--text-dim);
   font-size: 14px;
 }
+.traffic {
+  font-weight: 500;
+}
+.traffic .t-up {
+  color: #4ade80;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 4px;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+.traffic .t-down {
+  color: #38bdf8;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 4px;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+/* 被筛选隐藏的曲线变暗 */
+.traffic .t-up.off,
+.traffic .t-down.off {
+  opacity: 0.3;
+}
+/* 当前筛选的曲线高亮 */
+.traffic .t-up.active,
+.traffic .t-down.active {
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
+}
 .sse-dot {
   display: inline-block;
   width: 7px;
@@ -1109,6 +928,13 @@ function onClickOutside(e: MouseEvent) {
   transition: all 0.25s;
   cursor: text;
   min-width: 0;
+}
+
+/* 大屏：两侧卡片各 375px+24px 偏移，search-box 居中填充剩余空间 */
+@media (min-width: 1400px) {
+  .search-box {
+    max-width: min(660px, calc(100vw - 860px));
+  }
 }
 .search-box:focus-within {
   border-color: rgba(56, 189, 248, 0.5);
@@ -1265,195 +1091,12 @@ function onClickOutside(e: MouseEvent) {
   color: #ff8a8a;
 }
 
-/* 卡片 */
+/* 卡片网格容器（卡片自身样式在 ServiceCard.vue） */
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 18px;
   margin-top: 14px;
-}
-.card {
-  --c: #38bdf8;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 20px 18px 16px;
-  background: linear-gradient(150deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025));
-  border: 1px solid var(--card-border);
-  border-radius: 18px;
-  backdrop-filter: blur(16px);
-  text-decoration: none;
-  color: var(--text);
-  transition: all 0.28s ease;
-  animation: cardIn 0.4s ease;
-  overflow: hidden;
-}
-/* 顶部品牌色渐变光条 */
-.card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, transparent, var(--c), transparent);
-  opacity: 0.75;
-  pointer-events: none;
-}
-@keyframes cardIn {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.card:hover {
-  transform: translateY(-5px);
-  border-color: rgba(255, 255, 255, 0.18);
-  background: linear-gradient(150deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.045));
-  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.42);
-}
-.card:hover .card-icon {
-  transform: scale(1.08) rotate(-3deg);
-}
-
-/* 状态点 */
-.status-dot {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-.status-dot.online {
-  background: #22c55e;
-  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
-  animation: pulse 2s infinite;
-}
-.status-dot.offline {
-  background: #ef4444;
-}
-.status-dot.unknown {
-  background: #94a3b8;
-}
-@keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 7px rgba(34, 197, 94, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-  }
-}
-
-/* 图标 */
-.card-icon {
-  width: 54px;
-  height: 54px;
-  border-radius: 16px;
-  border: 1px solid rgba(56, 189, 248, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 26px;
-  color: var(--text);
-  transition: transform 0.28s ease;
-}
-.card-body {
-  min-width: 0;
-}
-.card-name {
-  font-size: 15.5px;
-  font-weight: 650;
-  margin-bottom: 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.card-desc {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--text-dim);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.card-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  color: var(--text-dim);
-  border-top: 1px solid var(--card-border);
-  padding-top: 10px;
-  margin-top: 2px;
-}
-.card-foot-right {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.card-clicks {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--card-border);
-  border-radius: 20px;
-  padding: 2px 9px;
-  font-size: 11.5px;
-}
-.docker-badge {
-  border-radius: 20px;
-  padding: 2px 9px;
-  font-size: 11px;
-  border: 1px solid;
-  white-space: nowrap;
-}
-.docker-badge.d-latest {
-  color: #22c55e;
-  background: rgba(34, 197, 94, 0.1);
-  border-color: rgba(34, 197, 94, 0.35);
-}
-.docker-badge.d-update {
-  color: #f59e0b;
-  background: rgba(245, 158, 11, 0.12);
-  border-color: rgba(245, 158, 11, 0.4);
-  animation: pulse-amber 2s ease-in-out infinite;
-}
-.docker-badge.d-checking {
-  color: var(--text-dim);
-  background: rgba(255, 255, 255, 0.04);
-  border-color: var(--card-border);
-}
-.docker-badge.d-unknown {
-  color: #94a3b8;
-  background: rgba(148, 163, 184, 0.08);
-  border-color: rgba(148, 163, 184, 0.25);
-}
-@keyframes pulse-amber {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.35);
-  }
-  50% {
-    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
-  }
-}
-.card-status {
-  color: #22c55e;
-}
-.status-dot.offline ~ .card-foot .card-status,
-.card:has(.status-dot.offline) .card-status {
-  color: #ef4444;
-}
-.card:has(.status-dot.unknown) .card-status {
-  color: var(--text-dim);
 }
 
 .empty,
@@ -1504,14 +1147,6 @@ function onClickOutside(e: MouseEvent) {
   .cards {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     gap: 12px;
-  }
-  .card {
-    padding: 14px;
-  }
-  .card-icon {
-    width: 42px;
-    height: 42px;
-    font-size: 21px;
   }
 }
 </style>

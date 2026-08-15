@@ -7,7 +7,16 @@ services:
     image: net-nav:latest
     container_name: net-nav
     ports:
-      - "6666:6666"
+      - "8080:6666"   # 6666 是 Chrome/Edge 不安全端口（直接访问被拦截），对外映射 8080
     restart: unless-stopped
     volumes:
-      - ./data:/app/data   # 数据库持久化
+      - ./data:/app/data   # 数据库持久化（宿主机需先 chown 1000:1000 ./data）
+    environment:
+      - TZ=Asia/Shanghai
+      # - ADMIN_PASSWORD=yourpassword   # 可选：设置后后台登录需密码（不设置则免密）
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

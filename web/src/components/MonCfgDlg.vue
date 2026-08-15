@@ -53,3 +53,17 @@ async function save() {
   }
 }
 </script>
+
+<style scoped>
+.cfg-unit {
+  margin-left: 8px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.cfg-tip {
+  width: 100%;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+</style>

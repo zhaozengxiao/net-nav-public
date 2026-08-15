@@ -37,9 +37,17 @@ function sshExec(host, port, user, pass, command, timeout = 10000) {
   });
 }
 
+// 容器名合法字符（Docker 命名规范）：字母数字开头，可含 . _ -
+const VALID_CONTAINER = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+// shell 单引号转义：容器名拼进远端命令前必须转义，防命令注入
+const shq = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
+
 // 读取容器当前镜像的 RepoDigest（如 calciumion/new-api@sha256:be4b...）
 async function getContainerDigest(container, cfg) {
-  const script = `CID=$(docker inspect -f '{{.Image}}' ${container} 2>/dev/null) && docker inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' $CID 2>/dev/null`;
+  if (typeof container !== "string" || !VALID_CONTAINER.test(container)) {
+    return { ok: false, reason: "badname" };
+  }
+  const script = `CID=$(docker inspect -f '{{.Image}}' ${shq(container)} 2>/dev/null) && docker inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' $CID 2>/dev/null`;
   const out = await sshExec(cfg.host, cfg.port || 22, cfg.user, cfg.pass, script);
   const m = out.match(/sha256:[0-9a-f]{64}/);
   if (!m) {
@@ -49,7 +57,7 @@ async function getContainerDigest(container, cfg) {
       cfg.port || 22,
       cfg.user,
       cfg.pass,
-      `docker inspect -f '{{.Name}}' ${container} 2>/dev/null || echo __NOTFOUND__`
+      `docker inspect -f '{{.Name}}' ${shq(container)} 2>/dev/null || echo __NOTFOUND__`
     );
     if (probe.includes("__NOTFOUND__")) return { ok: false, reason: "notfound" };
     return { ok: false, reason: "nodigest" };
@@ -58,15 +66,18 @@ async function getContainerDigest(container, cfg) {
 }
 
 // ---------- Registry：查询镜像最新 digest ----------
+// 10s 超时：registry 挂起时必须返回，否则 docker 检测队列 running 数会被卡死
+const HTTPS_TIMEOUT = 10000;
 function httpsGet(url, headers = {}) {
   return new Promise((resolve, reject) => {
-    https
-      .get(url, { headers }, (res) => {
+    const req = https
+      .get(url, { headers, timeout: HTTPS_TIMEOUT }, (res) => {
         let data = "";
         res.on("data", (d) => (data += d));
         res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }));
-      })
-      .on("error", reject);
+      });
+    req.on("timeout", () => req.destroy(new Error(`registry 请求超时（${HTTPS_TIMEOUT}ms）`)));
+    req.on("error", reject);
   });
 }
 
