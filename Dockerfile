@@ -10,15 +10,17 @@ RUN npm run build
 FROM node:22-alpine
 WORKDIR /app
 
-# better-sqlite3 v13 自带 linuxmusl 预编译二进制（prebuilds/ 随包分发，运行时按平台加载），
-# 无需 node-gyp 编译工具链（python3/make/g++ 不再需要）
+# better-sqlite3 v13 自带 linuxmusl 预编译二进制（prebuilds/ 随包分发，运行时按平台加载）。
+# 注意：包里带 binding.gyp，npm 检测到会自动跑 node-gyp rebuild（Alpine 无 Python 会失败），
+# 所以必须 --ignore-scripts 跳过编译，直接用预编译产物；ssh2 的 cpu-features 为可选依赖，
+# 未编译时 ssh2 自动降级，不影响功能。
 # 时区：容器日志/导出时间与本地（东八区）一致
 RUN apk add --no-cache tzdata \
   && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
   && echo "Asia/Shanghai" > /etc/timezone
 
 COPY server/package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 COPY server/ ./
 COPY --from=web-build /build/dist ./public
 
