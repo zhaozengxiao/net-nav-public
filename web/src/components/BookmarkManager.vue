@@ -36,8 +36,6 @@
           <span class="bm-caret bm-caret-empty"></span>
           <span class="bm-dot"></span>
           <span class="bm-tree-name">{{ row.name }}</span>
-          <a v-if="isSafeUrl(row.url)" :href="row.url" target="_blank" class="bm-url" rel="noopener">{{ row.url }}</a>
-          <span v-else class="bm-url">{{ row.url }}</span>
           <span class="bm-tree-ops">
             <el-button size="small" @click="openBmEdit({ id: row.id, name: row.name, url: row.url })">编辑</el-button>
             <el-button size="small" type="danger" plain @click="removeBookmark({ id: row.id, name: row.name })">删除</el-button>
@@ -88,7 +86,6 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, nextTick } 
 import { ElMessage, ElMessageBox } from "element-plus";
 import Sortable from "sortablejs";
 import api from "../api";
-import { isSafeUrl } from "../utils";
 
 const emit = defineEmits<{ (e: "auth-error"): void }>();
 
@@ -598,6 +595,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* ===== 书签管理 ===== */
+/* 与 Admin.vue 服务/分组 tab 的工具栏保持一致（scoped 样式不跨组件，需在此补齐） */
+.toolbar {
+  margin-bottom: 14px;
+}
 .bm-count {
   margin-left: auto;
   color: var(--text-dim);
@@ -712,7 +713,12 @@ onBeforeUnmount(() => {
 }
 .bm-tree-name {
   font-size: 13.5px;
-  flex-shrink: 0;
+  min-width: 0; /* 允许收缩，长名称截断而非把操作按钮顶飞 */
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80%;
 }
 .bm-tree-count {
   color: var(--text-dim);
