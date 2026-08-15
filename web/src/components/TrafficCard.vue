@@ -204,12 +204,18 @@ async function pollTraffic() {
       errMsg.value = "";
       // 首次拉取：若后端带了 history，用它填充初始曲线（打开页面即有最近 60 秒数据）
       if (!history.length && Array.isArray(r.history) && r.history.length) {
+        // 后端时间戳（checkedAt）来自服务器时钟，与浏览器时钟可能存在偏差：
+        // 刷新后若直接使用，曲线会错位/越界/被误清空。这里以"最后一点==当前时刻"为基准
+        // 重排时间轴（保持点与点之间的真实间隔），使曲线与浏览器绘制时钟自洽。
+        const last = r.history[r.history.length - 1];
+        const ref = last && typeof last.checkedAt === "number" ? last.checkedAt : Date.now();
+        const now = Date.now();
         for (const p of r.history) {
-          if (p && typeof p.up === "number" && typeof p.down === "number" && p.checkedAt) {
-            history.push({ up: p.up, down: p.down, t: p.checkedAt });
+          if (p && typeof p.up === "number" && typeof p.down === "number" && typeof p.checkedAt === "number") {
+            history.push({ up: p.up, down: p.down, t: now - (ref - p.checkedAt) });
           }
         }
-        // 去重最后一个（下面还会 push 最新一个）
+        // 去重最后一个（下面还会 push 最新一个，值相同、时刻=now）
         if (history.length > 0) history.pop();
       }
       history.push({ up: r.up, down: r.down, t: Date.now() });
