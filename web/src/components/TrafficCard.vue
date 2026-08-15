@@ -30,33 +30,10 @@ const padB = 14;
 
 interface SpeedPoint { up: number; down: number; t: number }
 
-const STORAGE_KEY = "nav_traffic_history";
-
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const history: SpeedPoint[] = [];
 let animId = 0;
 let pollTimer: number | undefined;
-
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const parsed: SpeedPoint[] = JSON.parse(raw);
-    const now = Date.now();
-    const cutoff = now - CHART_WINDOW;
-    const filtered = parsed.filter((p) => p.t >= cutoff);
-    history.push(...filtered);
-  } catch {
-    // ignore
-  }
-}
-function saveHistory() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-  } catch {
-    // ignore
-  }
-}
 
 function getMaxRate(): number {
   // 只统计最近 1 分钟（CHART_WINDOW）内的数据，上升下降即时跟随
@@ -203,7 +180,6 @@ async function pollTraffic() {
       while (history.length > 0 && history[0].t < cutoff) {
         history.shift();
       }
-      saveHistory();
     }
   } catch {
     // ignore
@@ -211,7 +187,6 @@ async function pollTraffic() {
 }
 
 onMounted(() => {
-  loadHistory();
   pollTraffic();
   pollTimer = window.setInterval(pollTraffic, POLL_INTERVAL);
   animId = requestAnimationFrame(drawChart);
