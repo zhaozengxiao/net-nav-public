@@ -1003,7 +1003,9 @@ setTimeout(scheduleDockerChecks, 2000);
 restartDockerTimer();
 
 // ---------- 爱快 v4.0 网速监控 ----------
+const IKUAI_HISTORY_MS = 60000; // 保留最近 60 秒历史
 let ikuaiTraffic = { up: -1, down: -1, checkedAt: 0, error: "未配置" };
+const ikuaiHistory = []; // 最近 60 秒的历史点 [{ up, down, checkedAt }]
 let ikuaiTimer = null;
 
 function ikuaiCfg() {
@@ -1019,15 +1021,23 @@ async function ikuaiPoll() {
   if (!cfg || !cfg.host || !cfg.token) return;
   const r = await ikuai.fetchTraffic(cfg);
   ikuaiTraffic = r;
-  // SSE 推送流量事件
-  broadcast("traffic", { up: r.up, down: r.down, checkedAt: r.checkedAt, error: r.error });
+  // 记录历史点，清理 60 秒前旧数据
+  if (r.up >= 0 && r.down >= 0 && r.checkedAt) {
+    ikuaiHistory.push({ up: r.up, down: r.down, checkedAt: r.checkedAt });
+    const cutoff = Date.now() - IKUAI_HISTORY_MS;
+    while (ikuaiHistory.length > 0 && ikuaiHistory[0].checkedAt < cutoff) {
+      ikuaiHistory.shift();
+    }
+  }
+  // SSE 推送流量事件（含历史，前端卡片可直接渲染近期曲线）
+  broadcast("traffic", { ...r, history: ikuaiHistory.slice() });
 }
 
 function restartIkuaiTimer() {
   if (ikuaiTimer) clearInterval(ikuaiTimer);
   const cfg = ikuaiCfg();
   if (!cfg || !cfg.host || !cfg.token) return;
-  const interval = Math.max(Math.min(Number(cfg.interval) || 3, 30), 1) * 1000;
+  const interval = Math.max(Math.min(Number(cfg.interval) || 1, 30), 1) * 1000;
   ikuaiPoll(); // 立即拉一次
   ikuaiTimer = setInterval(ikuaiPoll, interval);
 }
@@ -1036,11 +1046,11 @@ function restartIkuaiTimer() {
 let ikuaiCfgCache = null;
 app.get("/api/admin/ikuai-config", adminAuth, (req, res) => {
   const cfg = ikuaiCfg();
-  if (!cfg) return res.json({ host: "", port: 443, token: "", interval: 3, https: true, hasToken: false });
+  if (!cfg) return res.json({ host: "", port: 443, token: "", interval: 1, https: true, hasToken: false });
   // 迁移旧配置：https 开启时端口强制 443，端口 80 时 https 强制关闭
   const https = cfg.https !== false;
   const port = https ? (cfg.port && cfg.port !== 80 ? cfg.port : 443) : (cfg.port || 80);
-  const migrated = { host: cfg.host || "", port, token: cfg.token || "", interval: cfg.interval ?? 3, https };
+  const migrated = { host: cfg.host || "", port, token: cfg.token || "", interval: cfg.interval ?? 1, https };
   res.json({ ...migrated, token: cfg.token ? "******" : "", hasToken: !!cfg.token });
 });
 app.put("/api/admin/ikuai-config", adminAuth, (req, res) => {
@@ -1051,16 +1061,16 @@ app.put("/api/admin/ikuai-config", adminAuth, (req, res) => {
   if (token === null) nextToken = "";
   else if (typeof token === "string" && token.trim() !== "" && !isMask) nextToken = token.trim();
   else nextToken = (prev && prev.token) || "";
-  const cfg = { host: host || "", port: Number(port) || (https !== false ? 443 : 80), token: nextToken, interval: Math.min(Math.max(Number(interval) || 3, 1), 30), https: https !== false };
+  const cfg = { host: host || "", port: Number(port) || (https !== false ? 443 : 80), token: nextToken, interval: Math.min(Math.max(Number(interval) || 1, 1), 30), https: https !== false };
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('ikuai_config', ?)").run(JSON.stringify(cfg));
   ikuaiCfgCache = null;
   restartIkuaiTimer();
   res.json({ ok: true });
 });
 
-// 流量公开 API（前端轮询兜底/SSE 事件优先）
+// 流量公开 API（前端轮询兜底/SSE 事件优先），返回最近 60 秒历史
 app.get("/api/traffic", (req, res) => {
-  res.json(ikuaiTraffic);
+  res.json({ ...ikuaiTraffic, history: ikuaiHistory.slice() });
 });
 
 // 测试连接

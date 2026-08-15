@@ -187,6 +187,16 @@ async function pollTraffic() {
   try {
     const r: any = await api.get("/traffic", { silent: true });
     if (r && typeof r.up === "number" && r.down >= 0) {
+      // 首次拉取：若后端带了 history，用它填充初始曲线（打开页面即有最近 60 秒数据）
+      if (!history.length && Array.isArray(r.history) && r.history.length) {
+        for (const p of r.history) {
+          if (p && typeof p.up === "number" && typeof p.down === "number" && p.checkedAt) {
+            history.push({ up: p.up, down: p.down, t: p.checkedAt });
+          }
+        }
+        // 去重最后一个（下面还会 push 最新一个）
+        if (history.length > 0) history.pop();
+      }
       history.push({ up: r.up, down: r.down, t: Date.now() });
       // 每次轮询都清理 60 秒前的旧数据
       const cutoff = Date.now() - CHART_WINDOW;
